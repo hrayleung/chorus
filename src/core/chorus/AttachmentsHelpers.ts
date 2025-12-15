@@ -101,8 +101,8 @@ export async function resizeImageCompression(file: File): Promise<File> {
     const { resizedData } = await resizeImageCore(uint8Arr, file.name);
 
     // Create a new File object from the resized data
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return new File([resizedData as any], file.name, { type: file.type });
+    // Cast to BlobPart to satisfy TypeScript's strict type checking
+    return new File([resizedData as BlobPart], file.name, { type: file.type });
 }
 
 export const fileTypeToAttachmentType = (
@@ -161,8 +161,8 @@ export async function getFileFromPath(filePath: string): Promise<File> {
     const fileName = path.basename(filePath);
 
     // Create and return the File object
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return new File([fileData as any], fileName, {
+    // Cast to BlobPart to satisfy TypeScript's strict type checking
+    return new File([fileData as BlobPart], fileName, {
         type: mimeType,
         lastModified: Date.now(),
     });
@@ -256,10 +256,10 @@ export async function convertPdfToPng(filePath: string): Promise<string[]> {
 
         // Render PDF page to canvas
         await page.render({
+            canvas,
             canvasContext: context,
             viewport: viewport,
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        } as any).promise;
+        }).promise;
 
         // Convert canvas to PNG data URL
         const pngUrl = canvas.toDataURL("image/png");

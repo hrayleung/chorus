@@ -27,28 +27,14 @@ export class ProviderOpenAI implements IProvider {
         customBaseUrl,
     }: StreamResponseParams) {
         const modelId = modelConfig.modelId.split("::")[1];
-        if (
-            modelId !== "gpt-4o" &&
-            modelId !== "gpt-4o-mini" &&
-            modelId !== "o1" &&
-            modelId !== "o3-mini" &&
-            modelId !== "gpt-4.5-preview" &&
-            modelId !== "o1-pro" &&
-            modelId !== "gpt-4.1" &&
-            modelId !== "gpt-4.1-mini" &&
-            modelId !== "gpt-4.1-nano" &&
-            modelId !== "o3" &&
-            modelId !== "o4-mini" &&
-            modelId !== "o3-pro" &&
-            modelId !== "o3-deep-research" &&
-            modelId !== "gpt-5" &&
-            modelId !== "gpt-5-mini" &&
-            modelId !== "gpt-5-nano"
-        ) {
-            throw new Error(`Unsupported model: ${modelId}`);
-        }
 
-        const imageSupport = modelId !== "o3-mini" && modelId !== "o1";
+        // Determine image support based on model naming patterns
+        const imageSupport =
+            modelId.includes("gpt-4") ||
+            modelId.includes("gpt-5") ||
+            (modelId.startsWith("o") &&
+                !modelId.includes("mini") &&
+                modelId !== "o1");
 
         const { canProceed, reason } = canProceedWithProvider(
             "openai",

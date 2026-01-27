@@ -25,7 +25,7 @@ function isProviderError(error: unknown): error is ProviderError {
     );
 }
 
-function getGoogleModelName(modelName: string): string | undefined {
+function getGoogleModelName(modelName: string): string {
     if (
         [
             "gemini-2.0-flash-exp",
@@ -49,7 +49,9 @@ function getGoogleModelName(modelName: string): string | undefined {
         // alias deprecated preview model to stable version
         return "gemini-2.5-flash";
     }
-    return undefined;
+    // If not found in hardcoded mappings, return the model name as-is
+    // (supports dynamically fetched models from API)
+    return modelName;
 }
 
 // uses OpenAI provider to format the messages
@@ -67,9 +69,6 @@ export class ProviderGoogle implements IProvider {
     }: StreamResponseParams): Promise<ModelDisabled | void> {
         const modelName = modelConfig.modelId.split("::")[1];
         const googleModelName = getGoogleModelName(modelName);
-        if (!googleModelName) {
-            throw new Error(`Unsupported model: ${modelName}`);
-        }
 
         const { canProceed, reason } = canProceedWithProvider(
             "google",

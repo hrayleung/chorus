@@ -82,11 +82,13 @@ const ANTHROPIC_MODELS: AnthropicModelConfig[] = [
     },
 ];
 
-function getAnthropicModelName(modelName: string): string | undefined {
+function getAnthropicModelName(modelName: string): string {
     const modelConfig = ANTHROPIC_MODELS.find(
         (m) => m.inputModelName === modelName,
     );
-    return modelConfig?.anthropicModelName;
+    // If not found in hardcoded list, return the model name as-is
+    // (supports dynamically fetched models from API)
+    return modelConfig?.anthropicModelName ?? modelName;
 }
 
 export class ProviderAnthropic implements IProvider {
@@ -103,9 +105,6 @@ export class ProviderAnthropic implements IProvider {
     }: StreamResponseParams) {
         const modelName = modelConfig.modelId.split("::")[1];
         const anthropicModelName = getAnthropicModelName(modelName);
-        if (!anthropicModelName) {
-            throw new Error(`Unsupported model: ${modelConfig.modelId}`);
-        }
 
         const { canProceed, reason } = canProceedWithProvider(
             "anthropic",
@@ -400,10 +399,9 @@ const getMaxTokens = (modelId: string) => {
     const modelConfig = ANTHROPIC_MODELS.find(
         (m) => m.inputModelName === modelId,
     );
-    if (!modelConfig) {
-        throw new Error(`Unsupported model: ${modelId}`);
-    }
-    return modelConfig.maxTokens;
+    // Return default max tokens if model not found in hardcoded list
+    // (supports dynamically fetched models from API)
+    return modelConfig?.maxTokens ?? 8192;
 };
 
 /**

@@ -27,11 +27,11 @@ export function ThinkingParamsButton({
     const [budgetTokens, setBudgetTokens] = useState<string>(
         modelConfig.budgetTokens?.toString() ?? "",
     );
-    const [reasoningEffort, setReasoningEffort] = useState<
-        "low" | "medium" | "high" | "xhigh" | ""
-    >(modelConfig.reasoningEffort ?? "");
-    const [thinkingLevel, setThinkingLevel] = useState<"LOW" | "HIGH" | "">(
-        modelConfig.thinkingLevel ?? "",
+    const [reasoningEffort, setReasoningEffort] = useState<string>(
+        modelConfig.reasoningEffort ?? "default",
+    );
+    const [thinkingLevel, setThinkingLevel] = useState<string>(
+        modelConfig.thinkingLevel ?? "default",
     );
 
     const providerName = getProviderName(modelConfig.modelId);
@@ -54,8 +54,18 @@ export function ThinkingParamsButton({
             await updateThinkingParams.mutateAsync({
                 modelConfigId: modelConfig.id,
                 budgetTokens: budgetTokens ? parseInt(budgetTokens) : null,
-                reasoningEffort: reasoningEffort || null,
-                thinkingLevel: thinkingLevel || null,
+                reasoningEffort:
+                    reasoningEffort === "default"
+                        ? null
+                        : (reasoningEffort as
+                              | "low"
+                              | "medium"
+                              | "high"
+                              | "xhigh"),
+                thinkingLevel:
+                    thinkingLevel === "default"
+                        ? null
+                        : (thinkingLevel as "LOW" | "HIGH"),
             });
             toast.success("Thinking parameters updated");
             setOpen(false);
@@ -74,8 +84,8 @@ export function ThinkingParamsButton({
                 thinkingLevel: null,
             });
             setBudgetTokens("");
-            setReasoningEffort("");
-            setThinkingLevel("");
+            setReasoningEffort("default");
+            setThinkingLevel("default");
             toast.success("Thinking parameters reset");
         } catch (error) {
             toast.error("Failed to reset thinking parameters");
@@ -141,21 +151,14 @@ export function ThinkingParamsButton({
                             <Select
                                 value={reasoningEffort}
                                 onValueChange={(value) =>
-                                    setReasoningEffort(
-                                        value as
-                                            | "low"
-                                            | "medium"
-                                            | "high"
-                                            | "xhigh"
-                                            | "",
-                                    )
+                                    setReasoningEffort(value)
                                 }
                             >
                                 <SelectTrigger id="reasoning-effort">
                                     <SelectValue placeholder="Default (auto)" />
                                 </SelectTrigger>
                                 <SelectContent>
-                                    <SelectItem value="">
+                                    <SelectItem value="default">
                                         Default (auto)
                                     </SelectItem>
                                     <SelectItem value="low">
@@ -228,16 +231,14 @@ export function ThinkingParamsButton({
                             <Select
                                 value={thinkingLevel}
                                 onValueChange={(value) =>
-                                    setThinkingLevel(
-                                        value as "LOW" | "HIGH" | "",
-                                    )
+                                    setThinkingLevel(value)
                                 }
                             >
                                 <SelectTrigger id="thinking-level">
                                     <SelectValue placeholder="Default (HIGH)" />
                                 </SelectTrigger>
                                 <SelectContent>
-                                    <SelectItem value="">
+                                    <SelectItem value="default">
                                         Default (HIGH)
                                     </SelectItem>
                                     <SelectItem value="LOW">

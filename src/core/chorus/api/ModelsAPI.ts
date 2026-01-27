@@ -65,7 +65,8 @@ type ModelConfigDBRow = {
     is_internal: boolean;
     is_deprecated: boolean;
     budget_tokens: number | null;
-    reasoning_effort: "low" | "medium" | "high" | null;
+    reasoning_effort: "low" | "medium" | "high" | "xhigh" | null;
+    thinking_level: "LOW" | "HIGH" | null;
     new_until?: string;
     prompt_price_per_token: number | null;
     completion_price_per_token: number | null;
@@ -107,6 +108,7 @@ function readModelConfig(row: ModelConfigDBRow): ModelConfig {
         isDeprecated: row.is_deprecated,
         budgetTokens: row.budget_tokens ?? undefined,
         reasoningEffort: row.reasoning_effort ?? undefined,
+        thinkingLevel: row.thinking_level ?? undefined,
         newUntil: row.new_until ?? undefined,
         promptPricePerToken: row.prompt_price_per_token ?? undefined,
         completionPricePerToken: row.completion_price_per_token ?? undefined,
@@ -175,7 +177,7 @@ export async function fetchModelConfigs() {
             `SELECT model_configs.id, model_configs.display_name, model_configs.author,
                         model_configs.model_id, model_configs.system_prompt, models.is_enabled,
                         models.is_internal, models.supported_attachment_types, model_configs.is_default,
-                        models.is_deprecated, model_configs.budget_tokens, model_configs.reasoning_effort, model_configs.new_until,
+                        models.is_deprecated, model_configs.budget_tokens, model_configs.reasoning_effort, model_configs.thinking_level, model_configs.new_until,
                         models.prompt_price_per_token, models.completion_price_per_token
                  FROM model_configs
                  JOIN models ON model_configs.model_id = models.id
@@ -315,7 +317,7 @@ export async function fetchModelConfigById(
         `SELECT model_configs.id, model_configs.display_name, model_configs.author,
                     model_configs.model_id, model_configs.system_prompt, models.is_enabled,
                     models.is_internal, models.supported_attachment_types, model_configs.is_default,
-                    models.is_deprecated, model_configs.budget_tokens, model_configs.reasoning_effort, model_configs.new_until,
+                    models.is_deprecated, model_configs.budget_tokens, model_configs.reasoning_effort, model_configs.thinking_level, model_configs.new_until,
                     models.prompt_price_per_token, models.completion_price_per_token
              FROM model_configs
              JOIN models ON model_configs.model_id = models.id
@@ -521,6 +523,34 @@ export function useUpdateModelConfig() {
             await db.execute(
                 "UPDATE model_configs SET display_name = $1, system_prompt = $2 WHERE id = $3",
                 [displayName, systemPrompt, modelConfigId],
+            );
+        },
+        onSuccess: async () => {
+            await queryClient.invalidateQueries(
+                modelConfigQueries.listConfigs(),
+            );
+        },
+    });
+}
+
+export function useUpdateThinkingParams() {
+    const queryClient = useQueryClient();
+    return useMutation({
+        mutationKey: ["updateThinkingParams"] as const,
+        mutationFn: async ({
+            modelConfigId,
+            budgetTokens,
+            reasoningEffort,
+            thinkingLevel,
+        }: {
+            modelConfigId: string;
+            budgetTokens?: number | null;
+            reasoningEffort?: "low" | "medium" | "high" | "xhigh" | null;
+            thinkingLevel?: "LOW" | "HIGH" | null;
+        }) => {
+            await db.execute(
+                "UPDATE model_configs SET budget_tokens = $1, reasoning_effort = $2, thinking_level = $3 WHERE id = $4",
+                [budgetTokens, reasoningEffort, thinkingLevel, modelConfigId],
             );
         },
         onSuccess: async () => {

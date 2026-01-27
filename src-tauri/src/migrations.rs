@@ -2554,5 +2554,13 @@ You have full access to bash commands on the user''''s computer. If you write a 
                 UPDATE projects SET total_cost_usd = 0.0 WHERE total_cost_usd IS NULL;
             "#,
         },
+        Migration {
+            version: 139,
+            description: "add thinking_level column to model_configs for Gemini 3 thinking mode",
+            kind: MigrationKind::Up,
+            sql: r#"
+                ALTER TABLE model_configs ADD COLUMN thinking_level TEXT;
+            "#,
+        },
     ];
 }

@@ -47,6 +47,7 @@ import { hasApiKey } from "@core/utilities/ProxyUtils";
 import * as ModelsAPI from "@core/chorus/api/ModelsAPI";
 import * as MessageAPI from "@core/chorus/api/MessageAPI";
 import { useSettings } from "./hooks/useSettings";
+import { Settings as AppSettings } from "@core/utilities/Settings";
 
 // Helper function to filter models by search terms
 const filterBySearch = (models: ModelConfig[], searchTerms: string[]) => {
@@ -157,6 +158,7 @@ function ModelGroup({
     onAddApiKey,
     groupId,
     showCost,
+    appSettings,
 }: {
     heading: React.ReactNode;
     models: ModelConfig[];
@@ -168,6 +170,7 @@ function ModelGroup({
     onAddApiKey: () => void;
     groupId?: string;
     showCost: boolean;
+    appSettings?: AppSettings;
 }) {
     const { data: apiKeys } = AppMetadataAPI.useApiKeys();
 
@@ -179,6 +182,37 @@ function ModelGroup({
             // Local models (ollama, lmstudio) don't require API keys
             if (provider === "ollama" || provider === "lmstudio") {
                 return false;
+            }
+
+            // Vertex models require Vertex AI settings (credentials).
+            if (provider === "vertex") {
+                const vertex = appSettings?.vertexAI;
+                if (!vertex) {
+                    return true;
+                }
+                const hasVertexCredentials = Boolean(
+                    vertex.projectId.trim() &&
+                        vertex.location.trim() &&
+                        vertex.serviceAccountClientEmail.trim() &&
+                        vertex.serviceAccountPrivateKey.trim(),
+                );
+                return !hasVertexCredentials;
+            }
+
+            // Custom provider models require the custom provider to exist and have credentials.
+            if (provider === "custom_openai" || provider === "custom_anthropic") {
+                const providerId = model.modelId.split("::")[1] || "";
+                const kind = provider === "custom_anthropic" ? "anthropic" : "openai";
+                const customProvider = (
+                    appSettings?.customProviders ?? []
+                ).find((p) => p.id === providerId && p.kind === kind);
+                if (!customProvider) {
+                    return true;
+                }
+                return (
+                    !customProvider.apiBaseUrl.trim() ||
+                    !customProvider.apiKey.trim()
+                );
             }
 
             // If user has API key for this provider, allow it
@@ -196,7 +230,7 @@ function ModelGroup({
             // No API key for this provider - model is not allowed
             return true;
         },
-        [apiKeys],
+        [apiKeys, appSettings],
     );
 
     return (
@@ -261,7 +295,7 @@ function ModelGroup({
                                             onAddApiKey();
                                         }}
                                     >
-                                        Add API Key
+                                        Configure
                                     </Button>
                                 ) : (
                                     <>
@@ -498,6 +532,53 @@ export function ManageModelsBox({
             (m) => getProviderName(m.modelId) === "openrouter",
         );
 
+        const vertexModels = systemModels.filter(
+            (m) => getProviderName(m.modelId) === "vertex",
+        );
+
+        const customProviderModels = systemModels.filter((m) => {
+            const provider = getProviderName(m.modelId);
+            return provider === "custom_openai" || provider === "custom_anthropic";
+        });
+
+        const customProviderConfigById = new Map(
+            (settings?.customProviders ?? []).map((p) => [p.id, p] as const),
+        );
+
+        const modelsByCustomProviderId = new Map<string, ModelConfig[]>();
+        for (const model of customProviderModels) {
+            const providerId = model.modelId.split("::")[1] ?? "";
+            if (!providerId) continue;
+            const existing = modelsByCustomProviderId.get(providerId);
+            if (existing) {
+                existing.push(model);
+            } else {
+                modelsByCustomProviderId.set(providerId, [model]);
+            }
+        }
+
+        const customProviders = Array.from(modelsByCustomProviderId.entries())
+            .map(([providerId, models]) => {
+                const config = customProviderConfigById.get(providerId);
+                const providerName =
+                    config?.name ?? `Custom Provider (${providerId.slice(0, 8)})`;
+                const providerKind =
+                    config?.kind ??
+                    (models.some(
+                        (m) => getProviderName(m.modelId) === "custom_anthropic",
+                    )
+                        ? "anthropic"
+                        : "openai");
+                return {
+                    providerId,
+                    providerName,
+                    providerKind,
+                    models: filterBySearch(models, searchTerms),
+                };
+            })
+            .filter((group) => group.models.length > 0)
+            .sort((a, b) => a.providerName.localeCompare(b.providerName));
+
         // Direct provider models grouped by provider
         const directProviders = [
             "anthropic",
@@ -523,9 +604,11 @@ export function ManageModelsBox({
             custom: filterBySearch(userModels, searchTerms),
             local: filterBySearch(localModels, searchTerms),
             openrouter: filterBySearch(openrouterModels, searchTerms),
+            vertex: filterBySearch(vertexModels, searchTerms),
+            customProviders,
             directByProvider,
         };
-    }, [modelConfigs.data, searchQuery]);
+    }, [modelConfigs.data, searchQuery, settings]);
 
     useLayoutEffect(() => {
         if (!listRef.current) return;
@@ -804,6 +887,46 @@ export function ManageModelsBox({
                             showCost={showCost}
                         />
                     )}
+
+                    {modelGroups.vertex.length > 0 && (
+                        <ModelGroup
+                            heading="Vertex AI"
+                            models={modelGroups.vertex}
+                            checkedModelConfigIds={checkedModelConfigIds}
+                            mode={mode}
+                            onToggleModelConfig={handleToggleModelConfig}
+                            onAddApiKey={handleAddApiKey}
+                            groupId="vertex"
+                            showCost={showCost}
+                            appSettings={settings}
+                        />
+                    )}
+
+                    {modelGroups.customProviders.map((group) => (
+                        <ModelGroup
+                            key={group.providerId}
+                            heading={
+                                <div className="flex items-center gap-2">
+                                    <span>{group.providerName}</span>
+                                    <Badge variant="secondary">
+                                        <p className="text-muted-foreground text-xs">
+                                            {group.providerKind === "anthropic"
+                                                ? "Anthropic"
+                                                : "OpenAI"}
+                                        </p>
+                                    </Badge>
+                                </div>
+                            }
+                            models={group.models}
+                            checkedModelConfigIds={checkedModelConfigIds}
+                            mode={mode}
+                            onToggleModelConfig={handleToggleModelConfig}
+                            onAddApiKey={handleAddApiKey}
+                            groupId={`custom-provider-${group.providerId}`}
+                            showCost={showCost}
+                            appSettings={settings}
+                        />
+                    ))}
 
                     {/* Custom Models */}
                     {modelGroups.custom.length > 0 && (

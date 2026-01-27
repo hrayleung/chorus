@@ -17,7 +17,7 @@ import {
     TrashIcon,
     MixIcon,
 } from "@radix-ui/react-icons";
-import type { ModelConfig } from "@core/chorus/Models";
+import { getModelName, type ModelConfig } from "@core/chorus/Models";
 import {
     Dialog,
     DialogContent,
@@ -138,7 +138,7 @@ const PromptRow = React.memo(({ config }: { config: ModelConfig }) => {
         <>
             <TableRow>
                 <TableCell>{config.displayName}</TableCell>
-                <TableCell>{config.modelId.split("::")[1]}</TableCell>
+                <TableCell>{getModelName(config.modelId)}</TableCell>
                 <TableCell className="max-w-md truncate">
                     {config.systemPrompt || "No system prompt"}
                 </TableCell>

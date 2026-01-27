@@ -11,9 +11,14 @@ import {
     SelectValue,
 } from "./ui/select";
 import { Input } from "./ui/input";
-import { ModelConfig, getProviderName } from "@core/chorus/Models";
+import { ModelConfig, getModelName, getProviderName } from "@core/chorus/Models";
 import * as ModelsAPI from "@core/chorus/api/ModelsAPI";
 import { toast } from "sonner";
+import {
+    ANTHROPIC_THINKING_MIN_BUDGET_TOKENS,
+    clampAnthropicThinkingBudgetTokens,
+    getAnthropicMaxTokens,
+} from "@core/chorus/ModelProviders/anthropicModels";
 
 interface ThinkingParamsButtonProps {
     modelConfig: ModelConfig;
@@ -27,22 +32,66 @@ export function ThinkingParamsButton({
 
     // Local state to avoid stale closure issues
     // These track the current database values
-    const [localBudgetTokens, setLocalBudgetTokens] = useState<string>(
-        modelConfig.budgetTokens?.toString() ?? "",
-    );
+    const [localBudgetTokens, setLocalBudgetTokens] = useState<string>(() => {
+        const provider = getProviderName(modelConfig.modelId);
+        const modelName = getModelName(modelConfig.modelId);
+        const budgetTokens = modelConfig.budgetTokens;
+
+        if (provider === "anthropic" && budgetTokens !== undefined) {
+            return clampAnthropicThinkingBudgetTokens({
+                budgetTokens,
+                maxTokens: getAnthropicMaxTokens(modelName),
+            }).toString();
+        }
+
+        return budgetTokens?.toString() ?? "";
+    });
 
     // Sync local state when modelConfig changes from query refetch
     useEffect(() => {
-        setLocalBudgetTokens(modelConfig.budgetTokens?.toString() ?? "");
-    }, [modelConfig.budgetTokens]);
+        const provider = getProviderName(modelConfig.modelId);
+        const modelName = getModelName(modelConfig.modelId);
+        const budgetTokens = modelConfig.budgetTokens;
+
+        if (provider === "anthropic" && budgetTokens !== undefined) {
+            setLocalBudgetTokens(
+                clampAnthropicThinkingBudgetTokens({
+                    budgetTokens,
+                    maxTokens: getAnthropicMaxTokens(modelName),
+                }).toString(),
+            );
+            return;
+        }
+
+        setLocalBudgetTokens(budgetTokens?.toString() ?? "");
+    }, [modelConfig.modelId, modelConfig.budgetTokens]);
 
     // Debounce ref for budget tokens input
     const budgetDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(
         null,
     );
 
+    // Cleanup debounce on unmount
+    useEffect(() => {
+        return () => {
+            if (budgetDebounceRef.current) {
+                clearTimeout(budgetDebounceRef.current);
+            }
+        };
+    }, []);
+
     const providerName = getProviderName(modelConfig.modelId);
-    const modelName = modelConfig.modelId.split("::")[1];
+    const modelName = getModelName(modelConfig.modelId);
+
+    const anthropicMaxTokens =
+        providerName === "anthropic" ? getAnthropicMaxTokens(modelName) : null;
+    const anthropicMaxBudgetTokens =
+        providerName === "anthropic" && anthropicMaxTokens !== null
+            ? Math.max(
+                  ANTHROPIC_THINKING_MIN_BUDGET_TOKENS,
+                  anthropicMaxTokens - 1,
+              )
+            : null;
 
     // Determine which parameters to show based on provider
     const showReasoningEffort =
@@ -74,7 +123,7 @@ export function ThinkingParamsButton({
                 modelConfigId: modelConfig.id,
                 reasoningEffort: newEffort,
             });
-        } catch (error) {
+        } catch (_error) {
             toast.error("Failed to update reasoning effort");
         }
     };
@@ -87,7 +136,7 @@ export function ThinkingParamsButton({
                 modelConfigId: modelConfig.id,
                 thinkingLevel: newLevel,
             });
-        } catch (error) {
+        } catch (_error) {
             toast.error("Failed to update thinking level");
         }
     };
@@ -104,32 +153,42 @@ export function ThinkingParamsButton({
         }
 
         // Debounce the API call
-        budgetDebounceRef.current = setTimeout(async () => {
-            const numValue = value === "" ? null : parseInt(value);
+        budgetDebounceRef.current = setTimeout(() => {
+            void (async () => {
+                const numValue =
+                    value === "" ? null : Number.parseInt(value, 10);
 
-            if (value !== "" && isNaN(numValue as number)) {
-                return; // Invalid input, don't save
-            }
+                if (numValue !== null && Number.isNaN(numValue)) {
+                    return; // Invalid input, don't save
+                }
 
-            try {
-                await updateThinkingParams.mutateAsync({
-                    modelConfigId: modelConfig.id,
-                    budgetTokens: numValue,
-                });
-            } catch (error) {
-                toast.error("Failed to update budget tokens");
-            }
+                const budgetTokensToSave =
+                    providerName === "anthropic" && numValue !== null
+                        ? clampAnthropicThinkingBudgetTokens({
+                              budgetTokens: numValue,
+                              maxTokens: getAnthropicMaxTokens(modelName),
+                          })
+                        : numValue;
+
+                try {
+                    await updateThinkingParams.mutateAsync({
+                        modelConfigId: modelConfig.id,
+                        budgetTokens: budgetTokensToSave,
+                    });
+
+                    if (
+                        providerName === "anthropic" &&
+                        budgetTokensToSave !== null &&
+                        budgetTokensToSave !== numValue
+                    ) {
+                        setLocalBudgetTokens(budgetTokensToSave.toString());
+                    }
+                } catch (_error) {
+                    toast.error("Failed to update budget tokens");
+                }
+            })();
         }, 500);
     };
-
-    // Cleanup debounce on unmount
-    useEffect(() => {
-        return () => {
-            if (budgetDebounceRef.current) {
-                clearTimeout(budgetDebounceRef.current);
-            }
-        };
-    }, []);
 
     return (
         <Popover open={open} onOpenChange={setOpen}>
@@ -181,9 +240,7 @@ export function ThinkingParamsButton({
                                 )}
                             </Label>
                             <Select
-                                value={
-                                    modelConfig.reasoningEffort || "default"
-                                }
+                                value={modelConfig.reasoningEffort || "default"}
                                 onValueChange={handleReasoningEffortChange}
                             >
                                 <SelectTrigger id="reasoning-effort">
@@ -232,19 +289,25 @@ export function ThinkingParamsButton({
                                 type="number"
                                 placeholder={
                                     providerName === "anthropic"
-                                        ? "1024-20000"
+                                        ? `${ANTHROPIC_THINKING_MIN_BUDGET_TOKENS}-${anthropicMaxBudgetTokens ?? 20000}`
                                         : "0-24576 or -1 for dynamic"
                                 }
                                 value={localBudgetTokens}
                                 onChange={handleBudgetTokensChange}
-                                min={providerName === "anthropic" ? 1024 : -1}
+                                min={
+                                    providerName === "anthropic"
+                                        ? ANTHROPIC_THINKING_MIN_BUDGET_TOKENS
+                                        : -1
+                                }
                                 max={
-                                    providerName === "anthropic" ? 20000 : 24576
+                                    providerName === "anthropic"
+                                        ? anthropicMaxBudgetTokens ?? 20000
+                                        : 24576
                                 }
                             />
                             <p className="text-xs text-muted-foreground">
                                 {providerName === "anthropic"
-                                    ? "Min 1024. Higher = more reasoning time & cost"
+                                    ? `Min ${ANTHROPIC_THINKING_MIN_BUDGET_TOKENS}. Must be < max_tokens (${anthropicMaxTokens ?? "unknown"}).`
                                     : "Set to -1 for dynamic budget"}
                             </p>
                         </div>

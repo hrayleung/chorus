@@ -17,7 +17,6 @@ import { captureWholeScreenCompressed } from "@core/chorus/screenshot";
 import * as ProjectAPI from "@core/chorus/api/ProjectAPI";
 import * as DraftAPI from "@core/chorus/api/DraftAPI";
 import { invoke } from "@tauri-apps/api/core";
-import { SettingsManager } from "@core/utilities/Settings";
 
 export function useFilePaste({
     association,
@@ -200,18 +199,6 @@ export function useAttachUrl({
         mutationFn: async ({ url }: { url: string }) => {
             const path = await generateStorePath(url, "md");
 
-            // Get Firecrawl API key from settings
-            const settings = await SettingsManager.getInstance().get();
-            const firecrawlApiKey = settings.apiKeys?.firecrawl;
-
-            if (!firecrawlApiKey) {
-                toast.error("Firecrawl API key not configured", {
-                    description:
-                        "Please add your Firecrawl API key in Settings to scrape URLs.",
-                });
-                return;
-            }
-
             // Check rate limit
             if (!canScrape()) {
                 console.warn("Scrape rate limit exceeded. Please wait.");
@@ -231,22 +218,13 @@ export function useAttachUrl({
                 association,
             });
 
-            const result = await scrapeUrlAndWriteToPath(
-                url,
-                path,
-                firecrawlApiKey,
-            );
+            const result = await scrapeUrlAndWriteToPath(url, path);
 
             if (!result.success) {
-                const isApiKeyError = result.error?.includes("API key");
                 toast.error(
-                    isApiKeyError
-                        ? "Firecrawl API key required"
-                        : "Failed to scrape URL",
+                    "Failed to scrape URL",
                     {
-                        description: isApiKeyError
-                            ? "Please add your Firecrawl API key in Settings to scrape URLs."
-                            : result.error || "Please try again later.",
+                        description: result.error || "Please try again later.",
                     },
                 );
                 if (association.type === "draft") {

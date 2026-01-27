@@ -3,7 +3,7 @@ import { Label } from "./ui/label";
 import { ProviderName } from "@core/chorus/Models";
 import { ProviderLogo } from "./ui/provider-logo";
 import { Card } from "./ui/card";
-import { CheckIcon, FlameIcon } from "lucide-react";
+import { CheckIcon } from "lucide-react";
 import { useState } from "react";
 
 interface ApiKeysFormProps {
@@ -56,12 +56,6 @@ export default function ApiKeysForm({
             placeholder: "xai-...",
             url: "https://console.x.ai/settings/keys",
         },
-        {
-            id: "firecrawl",
-            name: "Firecrawl",
-            placeholder: "fc-...",
-            url: "https://www.firecrawl.dev/app/api-keys",
-        },
     ];
 
     return (
@@ -78,14 +72,10 @@ export default function ApiKeysForm({
                         onClick={() => setSelectedProvider(provider.id)}
                     >
                         <div className="flex flex-col items-center gap-2 text-center">
-                            {provider.id === "firecrawl" ? (
-                                <FlameIcon className="w-4 h-4" />
-                            ) : (
-                                <ProviderLogo
-                                    provider={provider.id as ProviderName}
-                                    size="lg"
-                                />
-                            )}
+                            <ProviderLogo
+                                provider={provider.id as ProviderName}
+                                size="lg"
+                            />
                             <span className="font-medium">{provider.name}</span>
                         </div>
                         {apiKeys[provider.id] && (

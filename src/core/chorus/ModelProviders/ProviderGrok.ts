@@ -4,7 +4,6 @@ import { IProvider } from "./IProvider";
 import { canProceedWithProvider } from "@core/utilities/ProxyUtils";
 import OpenAICompletionsAPIUtils from "@core/chorus/OpenAICompletionsAPIUtils";
 import JSON5 from "json5";
-import _ from "lodash";
 
 interface ProviderError {
     message: string;
@@ -33,6 +32,7 @@ export class ProviderGrok implements IProvider {
         onChunk,
         onComplete,
         additionalHeaders,
+        enabledToolsets,
         customBaseUrl,
     }: StreamResponseParams) {
         const modelName = modelConfig.modelId.split("::")[1];
@@ -75,6 +75,77 @@ export class ProviderGrok implements IProvider {
             ];
         }
 
+        const nativeWebSearchEnabled = enabledToolsets?.includes("web") ?? false;
+        const supportsNativeWebSearch = modelName.startsWith("grok-4");
+        const shouldUseNativeWebSearch =
+            nativeWebSearchEnabled && supportsNativeWebSearch;
+
+        if (shouldUseNativeWebSearch) {
+            try {
+                // Convert chat messages to the OpenAI Responses API input format.
+                const input =
+                    convertChatCompletionMessagesToResponsesInput(messages);
+
+                const stream = client.responses.stream({
+                    model: modelName,
+                    input,
+                    tools: [
+                        {
+                            type: "web_search",
+                        },
+                    ],
+                    tool_choice: "auto",
+                });
+
+                for await (const event of stream) {
+                    if (
+                        isPlainObject(event) &&
+                        event["type"] === "response.output_text.delta" &&
+                        typeof event["delta"] === "string"
+                    ) {
+                        onChunk(event["delta"]);
+                    }
+                }
+
+                const finalResponse = await stream.finalResponse();
+                const citations = (finalResponse as unknown as Record<
+                    string,
+                    unknown
+                >)?.["citations"];
+                if (Array.isArray(citations) && citations.length > 0) {
+                    const sourcesText = citations
+                        .map((url, index) =>
+                            typeof url === "string"
+                                ? `${index + 1}. [${url}](${url})`
+                                : `${index + 1}. ${safeToString(url)}`,
+                        )
+                        .join("\n");
+                    onChunk(`\n\nSources:\n${sourcesText}`);
+                }
+
+                await onComplete();
+                return;
+            } catch (error: unknown) {
+                console.error("Raw error:", error);
+                console.error(JSON.stringify(error, null, 2));
+
+                if (
+                    isProviderError(error) &&
+                    error.message === "Provider returned error"
+                ) {
+                    const errorDetails: ProviderError = JSON5.parse(
+                        error.error?.metadata?.raw ||
+                            error.metadata?.raw ||
+                            "{}",
+                    );
+                    throw new Error(
+                        `Provider returned error: ${errorDetails.error?.message || error.message}`,
+                    );
+                }
+                throw error;
+            }
+        }
+
         const streamParams: OpenAI.ChatCompletionCreateParamsStreaming & {
             include_reasoning: boolean;
             reasoning_effort?: string;
@@ -94,8 +165,13 @@ export class ProviderGrok implements IProvider {
         // Debug: Log reasoning parameters
         console.log(`[ProviderGrok] Model: ${modelName}`);
         console.log(`[ProviderGrok] isGrok3Mini: ${isGrok3Mini}`);
-        console.log(`[ProviderGrok] modelConfig.reasoningEffort: ${modelConfig.reasoningEffort}`);
-        console.log(`[ProviderGrok] streamParams.reasoning_effort:`, streamParams.reasoning_effort);
+        console.log(
+            `[ProviderGrok] modelConfig.reasoningEffort: ${modelConfig.reasoningEffort}`,
+        );
+        console.log(
+            `[ProviderGrok] streamParams.reasoning_effort:`,
+            streamParams.reasoning_effort,
+        );
 
         try {
             const stream = await client.chat.completions.create(streamParams);
@@ -124,5 +200,114 @@ export class ProviderGrok implements IProvider {
             }
             throw error;
         }
+    }
+}
+
+function convertChatCompletionMessagesToResponsesInput(
+    messages: OpenAI.ChatCompletionMessageParam[],
+): OpenAI.Responses.ResponseInputItem[] {
+    return messages.map((message) => {
+        const role = normalizeResponsesRole(message.role);
+        const content = message.content;
+
+        if (typeof content === "string") {
+            return { role, content };
+        }
+
+        if (Array.isArray(content)) {
+            const parts: OpenAI.Responses.ResponseInputContent[] = [];
+
+            for (const part of content) {
+                if (!isPlainObject(part) || typeof part["type"] !== "string") {
+                    parts.push({
+                        type: "input_text",
+                        text: safeToString(part),
+                    });
+                    continue;
+                }
+
+                if (part["type"] === "text") {
+                    parts.push({
+                        type: "input_text",
+                        text:
+                            typeof part["text"] === "string"
+                                ? part["text"]
+                                : safeToString(part["text"]),
+                    });
+                    continue;
+                }
+
+                if (part["type"] === "image_url") {
+                    const imageUrlValue = part["image_url"];
+                    const imageUrl =
+                        isPlainObject(imageUrlValue) &&
+                        typeof imageUrlValue["url"] === "string"
+                            ? imageUrlValue["url"]
+                            : null;
+                    const detail = isPlainObject(imageUrlValue)
+                        ? normalizeImageDetail(imageUrlValue["detail"])
+                        : "auto";
+
+                    parts.push({
+                        type: "input_image",
+                        detail,
+                        image_url: imageUrl,
+                    });
+                    continue;
+                }
+
+                parts.push({
+                    type: "input_text",
+                    text: safeToString(part),
+                });
+            }
+
+            return { role, content: parts };
+        }
+
+        if (content === null || content === undefined) {
+            return { role, content: "" };
+        }
+
+        return { role, content: safeToString(content) };
+    });
+}
+
+type ResponsesRole = "user" | "assistant" | "system" | "developer";
+
+function normalizeResponsesRole(
+    role: OpenAI.ChatCompletionMessageParam["role"],
+): ResponsesRole {
+    if (
+        role === "user" ||
+        role === "assistant" ||
+        role === "system" ||
+        role === "developer"
+    ) {
+        return role;
+    }
+    return "user";
+}
+
+function normalizeImageDetail(detail: unknown): "low" | "high" | "auto" {
+    if (detail === "low" || detail === "high" || detail === "auto") {
+        return detail;
+    }
+    return "auto";
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function safeToString(value: unknown): string {
+    if (typeof value === "string") {
+        return value;
+    }
+    try {
+        const jsonValue = JSON.stringify(value);
+        return jsonValue ?? String(value);
+    } catch {
+        return String(value);
     }
 }

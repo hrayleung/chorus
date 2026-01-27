@@ -116,6 +116,10 @@ function readModelConfig(row: ModelConfigDBRow): ModelConfig {
 }
 
 export async function fetchModelConfigs() {
+    // Keep user-configured providers (Vertex / custom endpoints) in sync with the DB.
+    await Models.syncVertexModels(db);
+    await Models.syncCustomProviderModels(db);
+
     const apiKeys = await getApiKeys();
 
     // Fetch models from various providers if we haven't already and the user has the API key.

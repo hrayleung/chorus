@@ -14,8 +14,9 @@ export interface Settings {
         google?: string;
         perplexity?: string;
         openrouter?: string;
-        firecrawl?: string;
     };
+    vertexAI?: VertexAISettings;
+    customProviders?: CustomProviderSettings[];
     quickChat?: {
         enabled?: boolean;
         modelConfigId?: string;
@@ -24,6 +25,30 @@ export interface Settings {
     lmStudioBaseUrl?: string;
     cautiousEnter?: boolean;
 }
+
+export type CustomProviderKind = "openai" | "anthropic";
+
+export type ProviderModelDefinition = {
+    nickname?: string;
+    modelId: string;
+};
+
+export type VertexAISettings = {
+    projectId: string;
+    location: string;
+    serviceAccountClientEmail: string;
+    serviceAccountPrivateKey: string;
+    models: ProviderModelDefinition[];
+};
+
+export type CustomProviderSettings = {
+    id: string;
+    kind: CustomProviderKind;
+    name: string;
+    apiBaseUrl: string;
+    apiKey: string;
+    models: ProviderModelDefinition[];
+};
 
 export class SettingsManager {
     private static instance: SettingsManager;
@@ -50,6 +75,8 @@ export class SettingsManager {
                 autoScrapeUrls: true,
                 showCost: false,
                 apiKeys: {},
+                vertexAI: undefined,
+                customProviders: [],
                 quickChat: {
                     enabled: true,
                     modelConfigId: "anthropic::claude-sonnet-4-5-20250929",
@@ -74,6 +101,8 @@ export class SettingsManager {
                 autoScrapeUrls: true,
                 showCost: false,
                 apiKeys: {},
+                vertexAI: undefined,
+                customProviders: [],
                 quickChat: {
                     enabled: true,
                     modelConfigId: "anthropic::claude-3-5-sonnet-latest",

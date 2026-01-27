@@ -33,7 +33,6 @@ import {
 } from "lucide-react";
 import {
     User2,
-    Key,
     LucideIcon,
     PlugIcon,
     FileText,
@@ -87,6 +86,7 @@ import { dialogActions } from "@core/infra/DialogStore";
 import * as AppMetadataAPI from "@core/chorus/api/AppMetadataAPI";
 import { PermissionsTab } from "./PermissionsTab";
 import { cn } from "@ui/lib/utils";
+import { ProvidersTab } from "./ProvidersTab";
 
 type ToolsetFormProps = {
     toolset: CustomToolsetConfig;
@@ -1110,7 +1110,7 @@ const TABS: Record<SettingsTabId, TabConfig> = {
     general: { label: "General", icon: User2 },
     import: { label: "Import", icon: Import },
     "system-prompt": { label: "System Prompt", icon: FileText },
-    "api-keys": { label: "API Keys", icon: Key },
+    "api-keys": { label: "Providers", icon: LinkIcon },
     "quick-chat": { label: "Ambient Chat", icon: Fullscreen },
     connections: { label: "Connections", icon: PlugIcon },
     permissions: { label: "Tool Permissions", icon: ShieldCheckIcon },
@@ -1433,7 +1433,7 @@ export default function Settings({ tab = "general" }: SettingsProps) {
                                 <p className="text-sm text-muted-foreground">
                                     Chorus requires you to bring your own API
                                     keys to use AI models. Add your keys in the
-                                    API Keys tab.
+                                    Providers tab.
                                 </p>
                                 <div className="flex gap-2">
                                     <Button
@@ -1441,7 +1441,7 @@ export default function Settings({ tab = "general" }: SettingsProps) {
                                         size="sm"
                                         onClick={() => setActiveTab("api-keys")}
                                     >
-                                        Configure API Keys
+                                        Configure Providers
                                     </Button>
                                     <Button
                                         variant="ghost"
@@ -1733,12 +1733,12 @@ export default function Settings({ tab = "general" }: SettingsProps) {
                         <div className="space-y-6 max-w-2xl">
                             <div>
                                 <h2 className="text-2xl font-semibold mb-2">
-                                    API Keys
+                                    Providers
                                 </h2>
                                 <p className="text-sm text-muted-foreground">
-                                    Enter your API keys for the providers you
-                                    want to use. Models for each provider will
-                                    become available once you add a valid key.
+                                    Bring your own keys and connect third-party
+                                    providers (Vertex AI + OpenAI/Anthropic
+                                    compatible endpoints).
                                 </p>
                             </div>
                             <div className="space-y-4">
@@ -1772,6 +1772,8 @@ export default function Settings({ tab = "general" }: SettingsProps) {
                                         />
                                     </CollapsibleContent>
                                 </Collapsible>
+                                <Separator className="my-4" />
+                                <ProvidersTab />
                             </div>
                         </div>
                     )}

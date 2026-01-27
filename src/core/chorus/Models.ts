@@ -17,9 +17,17 @@ import { ollamaClient } from "./OllamaClient";
 import { ProviderOllama } from "./ModelProviders/ProviderOllama";
 import { ProviderLMStudio } from "./ModelProviders/ProviderLMStudio";
 import { ProviderGrok } from "./ModelProviders/ProviderGrok";
+import { ProviderVertex } from "./ModelProviders/ProviderVertex";
+import { ProviderCustomOpenAI } from "./ModelProviders/ProviderCustomOpenAI";
+import { ProviderCustomAnthropic } from "./ModelProviders/ProviderCustomAnthropic";
 import posthog from "posthog-js";
 import { UserTool, UserToolCall, UserToolResult } from "./Toolsets";
 import { Attachment } from "./api/AttachmentsAPI";
+import {
+    CustomProviderSettings,
+    SettingsManager,
+    VertexAISettings,
+} from "@core/utilities/Settings";
 
 /// ------------------------------------------------------------------------------------------------
 /// Basic Types
@@ -218,6 +226,11 @@ export type StreamResponseParams = {
     modelConfig: ModelConfig;
     llmConversation: LLMMessage[];
     tools?: UserTool[];
+    /**
+     * Names of enabled toolsets (e.g. ["web", "terminal"]).
+     * Useful when a toolset influences provider behavior without exposing function tools.
+     */
+    enabledToolsets?: string[];
     apiKeys: ApiKeys;
     onChunk: (chunk: string) => void;
     onComplete: (
@@ -243,6 +256,9 @@ export type ProviderName =
     | "ollama"
     | "lmstudio"
     | "grok"
+    | "vertex"
+    | "custom_openai"
+    | "custom_anthropic"
     | "meta";
 
 /**
@@ -279,6 +295,25 @@ export function getProviderName(modelId: string): ProviderName {
     return providerName as ProviderName;
 }
 
+/**
+ * Returns the model name from a model id.
+ * Ex: "openrouter::meta-llama/llama-4-scout" -> "meta-llama/llama-4-scout"
+ * Ex: "custom_openai::<providerId>::gpt-4o-mini" -> "gpt-4o-mini"
+ */
+export function getModelName(modelId: string): string {
+    const parts = modelId.split("::");
+    if (parts.length <= 1) {
+        return modelId;
+    }
+
+    const provider = parts[0];
+    if (provider === "custom_openai" || provider === "custom_anthropic") {
+        return parts.slice(2).join("::");
+    }
+
+    return parts.slice(1).join("::");
+}
+
 function getProvider(providerName: string): IProvider {
     switch (providerName) {
         case "openai":
@@ -297,6 +332,12 @@ function getProvider(providerName: string): IProvider {
             return new ProviderLMStudio();
         case "grok":
             return new ProviderGrok();
+        case "vertex":
+            return new ProviderVertex();
+        case "custom_openai":
+            return new ProviderCustomOpenAI();
+        case "custom_anthropic":
+            return new ProviderCustomAnthropic();
         default:
             throw new Error(`Unknown provider: ${providerName}`);
     }
@@ -347,6 +388,89 @@ export async function saveModelAndDefaultConfig(
     await db.execute(
         "INSERT OR REPLACE INTO model_configs (id, display_name, author, model_id, system_prompt) VALUES (?, ?, ?, ?, ?)",
         [model.id, modelConfigDisplayName, "system", model.id, ""],
+    );
+}
+
+function hasVertexCredentials(vertex: VertexAISettings): boolean {
+    return Boolean(
+        vertex.projectId.trim() &&
+            vertex.location.trim() &&
+            vertex.serviceAccountClientEmail.trim() &&
+            vertex.serviceAccountPrivateKey.trim(),
+    );
+}
+
+export async function syncVertexModels(db: Database): Promise<void> {
+    await db.execute(
+        "UPDATE models SET is_enabled = 0 WHERE id LIKE 'vertex::%'",
+    );
+
+    const settings = await SettingsManager.getInstance().get();
+    const vertex = settings.vertexAI;
+
+    if (!vertex || !hasVertexCredentials(vertex) || vertex.models.length === 0) {
+        return;
+    }
+
+    await Promise.all(
+        vertex.models
+            .filter((model) => model.modelId.trim() !== "")
+            .map((model) => {
+                const modelId = model.modelId.trim();
+                const displayName = model.nickname?.trim() || modelId;
+                return saveModelAndDefaultConfig(
+                    db,
+                    {
+                        id: `vertex::${modelId}`,
+                        displayName,
+                        supportedAttachmentTypes: ["text", "image", "webpage"],
+                        isEnabled: true,
+                        isInternal: false,
+                    },
+                    displayName,
+                );
+            }),
+    );
+}
+
+export async function syncCustomProviderModels(db: Database): Promise<void> {
+    await db.execute(
+        "UPDATE models SET is_enabled = 0 WHERE id LIKE 'custom_openai::%' OR id LIKE 'custom_anthropic::%'",
+    );
+
+    const settings = await SettingsManager.getInstance().get();
+    const customProviders = settings.customProviders ?? [];
+
+    await Promise.all(
+        customProviders.flatMap((provider: CustomProviderSettings) => {
+            const prefix =
+                provider.kind === "anthropic"
+                    ? "custom_anthropic"
+                    : "custom_openai";
+
+            const supportedAttachmentTypes: AttachmentType[] =
+                provider.kind === "anthropic"
+                    ? ["text", "image", "pdf", "webpage"]
+                    : ["text", "image", "webpage"];
+
+            return provider.models
+                .filter((model) => model.modelId.trim() !== "")
+                .map((model) => {
+                    const modelId = model.modelId.trim();
+                    const displayName = model.nickname?.trim() || modelId;
+                    return saveModelAndDefaultConfig(
+                        db,
+                        {
+                            id: `${prefix}::${provider.id}::${modelId}`,
+                            displayName,
+                            supportedAttachmentTypes,
+                            isEnabled: true,
+                            isInternal: false,
+                        },
+                        displayName,
+                    );
+                });
+        }),
     );
 }
 
@@ -601,10 +725,6 @@ export async function downloadAnthropicModels(
     apiKeys: ApiKeys,
 ): Promise<void> {
     try {
-        await db.execute(
-            "UPDATE models SET is_enabled = 0 WHERE id LIKE 'anthropic::%'",
-        );
-
         if (!apiKeys.anthropic) {
             console.log(
                 "No Anthropic API key configured, skipping model download",
@@ -620,9 +740,34 @@ export async function downloadAnthropicModels(
         });
 
         if (!response.ok) {
-            console.error("Failed to fetch Anthropic models");
+            const errorText = await response.text().catch(() => "");
+            console.error(
+                "Failed to fetch Anthropic models",
+                response.status,
+                response.statusText,
+                errorText,
+            );
+
+            // If the key is invalid, disable Anthropic models so they can't be selected.
+            // For transient failures, keep (and re-enable) existing models so the user
+            // can still use pre-seeded Claude configs.
+            if (response.status === 401 || response.status === 403) {
+                await db.execute(
+                    "UPDATE models SET is_enabled = 0 WHERE id LIKE 'anthropic::%'",
+                );
+            } else {
+                await db.execute(
+                    "UPDATE models SET is_enabled = 1 WHERE id LIKE 'anthropic::%'",
+                );
+            }
             return;
         }
+
+        // Keep existing pre-seeded Claude configs usable even if the Models API
+        // returns a different set of canonical IDs than our aliases.
+        await db.execute(
+            "UPDATE models SET is_enabled = 1 WHERE id LIKE 'anthropic::%'",
+        );
 
         const { data: models } = (await response.json()) as {
             data: {
@@ -657,8 +802,10 @@ export async function downloadAnthropicModels(
         }
     } catch (error) {
         console.error("Error downloading Anthropic models:", error);
+        // Don't strand the user without Claude models if the network request fails.
+        // This is especially important for first-time key setup flows.
         await db.execute(
-            "UPDATE models SET is_enabled = 0 WHERE id LIKE 'anthropic::%'",
+            "UPDATE models SET is_enabled = 1 WHERE id LIKE 'anthropic::%'",
         );
     }
 }
@@ -902,6 +1049,9 @@ const CONTEXT_LIMIT_PATTERNS: Record<ProviderName, string> = {
     lmstudio: "context window", // best guess
     perplexity: "context window", // best guess
     ollama: "context window", // best guess
+    vertex: "context window", // best guess
+    custom_openai: "context window", // best guess
+    custom_anthropic: "prompt is too long", // best guess
 };
 
 /**

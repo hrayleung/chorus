@@ -24,6 +24,7 @@ export class ProviderOpenAI implements IProvider {
         onComplete,
         additionalHeaders,
         tools,
+        enabledToolsets,
         customBaseUrl,
     }: StreamResponseParams) {
         const modelId = modelConfig.modelId.split("::")[1];
@@ -96,15 +97,20 @@ export class ProviderOpenAI implements IProvider {
             ];
         }
 
-        // Convert tools to OpenAI format
-        // For o3-deep-research, filter out native web search since we use OpenAI's web_search_preview
-        const filteredTools =
-            modelId === "o3-deep-research"
-                ? tools?.filter((tool) => tool.toolsetName !== "web")
-                : tools;
+        const nativeWebSearchEnabled =
+            enabledToolsets?.includes("web") ?? false;
+
+        const supportsNativeWebSearch =
+            modelId.startsWith("o") ||
+            modelId.startsWith("gpt-4o") ||
+            modelId.startsWith("gpt-4.1") ||
+            modelId.startsWith("gpt-5");
+
+        const shouldUseNativeWebSearch =
+            nativeWebSearchEnabled && supportsNativeWebSearch;
 
         const openaiTools: Array<OpenAI.Responses.FunctionTool> | undefined =
-            filteredTools?.map((tool) => ({
+            tools?.map((tool) => ({
                 type: "function",
                 name: getUserToolNamespacedName(tool), // name goes at this level for OpenAI
                 description: tool.description,
@@ -116,16 +122,28 @@ export class ProviderOpenAI implements IProvider {
                 strict: false,
             }));
 
+        const nativeWebSearchTools = shouldUseNativeWebSearch
+            ? [
+                  {
+                      type: "web_search_preview",
+                      search_context_size: "medium",
+                  } as const,
+              ]
+            : [];
+
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const createParams: any = {
             model: modelId,
             input: messages,
-            tools: openaiTools || [],
+            tools: [...nativeWebSearchTools, ...(openaiTools || [])],
             tool_choice:
-                tools && tools.length > 0
+                nativeWebSearchTools.length > 0 || (tools && tools.length > 0)
                     ? ("auto" as const)
                     : ("none" as const),
             stream: true as const,
+            ...(nativeWebSearchTools.length > 0 && {
+                include: ["web_search_call.action.sources"],
+            }),
             ...(isReasoningModel && {
                 reasoning: {
                     effort: modelConfig.reasoningEffort || "medium",
@@ -136,8 +154,13 @@ export class ProviderOpenAI implements IProvider {
         // Debug: Log reasoning parameters
         console.log(`[ProviderOpenAI] Model: ${modelId}`);
         console.log(`[ProviderOpenAI] Is reasoning model: ${isReasoningModel}`);
-        console.log(`[ProviderOpenAI] modelConfig.reasoningEffort: ${modelConfig.reasoningEffort}`);
-        console.log(`[ProviderOpenAI] createParams.reasoning:`, createParams.reasoning);
+        console.log(
+            `[ProviderOpenAI] modelConfig.reasoningEffort: ${modelConfig.reasoningEffort}`,
+        );
+        console.log(
+            `[ProviderOpenAI] createParams.reasoning:`,
+            (createParams as { reasoning?: unknown }).reasoning,
+        );
 
         // Add special tools for o3-deep-research
         if (modelId === "o3-deep-research") {
@@ -162,6 +185,9 @@ export class ProviderOpenAI implements IProvider {
             // o3-deep-research requires tool_choice to be "auto" when using code_interpreter
             // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
             createParams.tool_choice = "auto";
+            // Include sources so we can surface citations/URLs when available
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+            createParams.include = ["web_search_call.action.sources"];
         }
 
         const client = new OpenAI({

@@ -5,6 +5,7 @@ import { IProvider, ModelDisabled } from "./IProvider";
 import OpenAICompletionsAPIUtils from "@core/chorus/OpenAICompletionsAPIUtils";
 import { canProceedWithProvider } from "@core/utilities/ProxyUtils";
 import JSON5 from "json5";
+import { fetch } from "@tauri-apps/plugin-http";
 
 interface ProviderError {
     message: string;
@@ -64,6 +65,7 @@ export class ProviderGoogle implements IProvider {
         apiKeys,
         additionalHeaders,
         tools,
+        enabledToolsets,
         onError,
         customBaseUrl,
     }: StreamResponseParams): Promise<ModelDisabled | void> {
@@ -79,6 +81,28 @@ export class ProviderGoogle implements IProvider {
             throw new Error(
                 reason || "Please add your Google AI API key in Settings.",
             );
+        }
+
+        const googleApiKey = apiKeys.google;
+        if (!googleApiKey) {
+            throw new Error("Please add your Google AI API key in Settings.");
+        }
+
+        const nativeWebSearchEnabled =
+            enabledToolsets?.includes("web") ?? false;
+
+        if (nativeWebSearchEnabled) {
+            await streamGroundedResponseWithGoogleSearch({
+                googleModelName,
+                llmConversation,
+                systemPrompt: modelConfig.systemPrompt,
+                apiKey: googleApiKey,
+                onChunk,
+                onComplete,
+                onError,
+                customBaseUrl,
+            });
+            return;
         }
 
         // Google AI uses the generativelanguage.googleapis.com endpoint with OpenAI compatibility
@@ -101,7 +125,7 @@ export class ProviderGoogle implements IProvider {
         };
         const client = new OpenAI({
             baseURL,
-            apiKey: apiKeys.google,
+            apiKey: googleApiKey,
             defaultHeaders: headers,
             dangerouslyAllowBrowser: true,
         });
@@ -137,22 +161,33 @@ export class ProviderGoogle implements IProvider {
 
         if (isGemini3 && modelConfig.thinkingLevel) {
             // Gemini 3 uses thinking_level parameter
-            (streamParams as unknown as Record<string, unknown>).thinking_level =
-                modelConfig.thinkingLevel;
+            (
+                streamParams as unknown as Record<string, unknown>
+            ).thinking_level = modelConfig.thinkingLevel;
         } else if (isGemini25 && modelConfig.budgetTokens) {
             // Gemini 2.5 uses thinking_budget parameter
-            (streamParams as unknown as Record<string, unknown>).thinking_budget =
-                modelConfig.budgetTokens;
+            (
+                streamParams as unknown as Record<string, unknown>
+            ).thinking_budget = modelConfig.budgetTokens;
         }
 
         // Debug: Log thinking parameters
         console.log(`[ProviderGoogle] Model: ${googleModelName}`);
-        console.log(`[ProviderGoogle] isGemini3: ${isGemini3}, isGemini25: ${isGemini25}`);
-        console.log(`[ProviderGoogle] modelConfig.thinkingLevel: ${modelConfig.thinkingLevel}`);
-        console.log(`[ProviderGoogle] modelConfig.budgetTokens: ${modelConfig.budgetTokens}`);
+        console.log(
+            `[ProviderGoogle] isGemini3: ${isGemini3}, isGemini25: ${isGemini25}`,
+        );
+        console.log(
+            `[ProviderGoogle] modelConfig.thinkingLevel: ${modelConfig.thinkingLevel}`,
+        );
+        console.log(
+            `[ProviderGoogle] modelConfig.budgetTokens: ${modelConfig.budgetTokens}`,
+        );
         console.log(`[ProviderGoogle] streamParams thinking params:`, {
-            thinking_level: (streamParams as unknown as Record<string, unknown>).thinking_level,
-            thinking_budget: (streamParams as unknown as Record<string, unknown>).thinking_budget
+            thinking_level: (streamParams as unknown as Record<string, unknown>)
+                .thinking_level,
+            thinking_budget: (
+                streamParams as unknown as Record<string, unknown>
+            ).thinking_budget,
         });
 
         // Add tools definitions
@@ -225,4 +260,261 @@ function getErrorMessage(error: unknown): string {
     } else {
         return "Unknown error";
     }
+}
+
+async function streamGroundedResponseWithGoogleSearch(params: {
+    googleModelName: string;
+    llmConversation: StreamResponseParams["llmConversation"];
+    systemPrompt: string | undefined;
+    apiKey: string;
+    onChunk: StreamResponseParams["onChunk"];
+    onComplete: StreamResponseParams["onComplete"];
+    onError: StreamResponseParams["onError"];
+    customBaseUrl: string | undefined;
+}): Promise<void> {
+    try {
+        const { googleModelName, llmConversation, systemPrompt, apiKey } =
+            params;
+
+        const messages = await OpenAICompletionsAPIUtils.convertConversation(
+            llmConversation,
+            {
+                imageSupport: false,
+                functionSupport: false,
+            },
+        );
+
+        const contents: Array<{
+            role: "user" | "model";
+            parts: Array<{ text: string }>;
+        }> = messages.map((m) => {
+            const text = normalizeToText(m.content);
+            return {
+                role: m.role === "assistant" ? "model" : "user",
+                parts: [{ text: text.trim() === "" ? "..." : text }],
+            };
+        });
+
+        if (systemPrompt) {
+            if (contents.length > 0 && contents[0].role === "user") {
+                contents[0].parts[0].text =
+                    `${systemPrompt}\n\n` + contents[0].parts[0].text;
+            } else {
+                contents.unshift({
+                    role: "user",
+                    parts: [{ text: systemPrompt }],
+                });
+            }
+        }
+
+        const geminiBaseUrl = params.customBaseUrl
+            ? params.customBaseUrl.replace(/\/openai\/?$/, "")
+            : "https://generativelanguage.googleapis.com/v1beta";
+
+        const response = await fetch(
+            `${geminiBaseUrl}/models/${googleModelName}:generateContent`,
+            {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "x-goog-api-key": apiKey,
+                },
+                body: JSON.stringify({
+                    contents,
+                    tools: [
+                        {
+                            google_search: {},
+                        },
+                    ],
+                }),
+            },
+        );
+
+        if (!response.ok) {
+            const errorBody = await safeJson(response);
+            throw new Error(
+                getGeminiErrorMessageFromBody(errorBody) ?? response.statusText,
+            );
+        }
+
+        const data = (await response.json()) as unknown;
+        const { text, sources } = extractGeminiTextAndSources(data);
+
+        if (text) {
+            params.onChunk(text);
+        }
+        if (sources.length > 0) {
+            const sourcesText = sources
+                .map((s, i) => `${i + 1}. [${s.title || s.url}](${s.url})`)
+                .join("\n");
+            params.onChunk(`\n\nSources:\n${sourcesText}`);
+        }
+
+        await params.onComplete();
+    } catch (error) {
+        console.error("Error using Gemini google_search grounding:", error);
+        params.onError(getErrorMessage(error));
+    }
+}
+
+function normalizeToText(
+    content: OpenAI.ChatCompletionMessageParam["content"],
+): string {
+    if (typeof content === "string") {
+        return content;
+    }
+
+    if (Array.isArray(content)) {
+        return content
+            .map((part) => (isOpenAITextPart(part) ? part.text : ""))
+            .filter(Boolean)
+            .join("\n");
+    }
+
+    try {
+        return JSON.stringify(content);
+    } catch {
+        return String(content);
+    }
+}
+
+async function safeJson(response: Response): Promise<unknown> {
+    try {
+        return (await response.json()) as unknown;
+    } catch {
+        return undefined;
+    }
+}
+
+function getGeminiErrorMessageFromBody(body: unknown): string | undefined {
+    if (!isPlainObject(body)) {
+        return undefined;
+    }
+
+    const errorValue = body["error"];
+    if (!isPlainObject(errorValue)) {
+        return undefined;
+    }
+
+    const messageValue = errorValue["message"];
+    return typeof messageValue === "string" ? messageValue : undefined;
+}
+
+function extractGeminiTextAndSources(data: unknown): {
+    text: string;
+    sources: Array<{ url: string; title?: string }>;
+} {
+    if (!isPlainObject(data)) {
+        return { text: "", sources: [] };
+    }
+
+    const candidatesValue = data["candidates"];
+    if (!isUnknownArray(candidatesValue) || candidatesValue.length === 0) {
+        return { text: "", sources: [] };
+    }
+
+    const firstCandidate = candidatesValue[0];
+    if (!isPlainObject(firstCandidate)) {
+        return { text: "", sources: [] };
+    }
+
+    const text = extractTextFromCandidate(firstCandidate);
+    const grounding = firstCandidate["groundingMetadata"];
+    const sources: Array<{ url: string; title?: string }> = [];
+
+    if (isPlainObject(grounding)) {
+        const groundingChunksValue = grounding["groundingChunks"];
+        if (Array.isArray(groundingChunksValue)) {
+            for (const chunk of groundingChunksValue) {
+                if (!isPlainObject(chunk)) continue;
+                const webValue = chunk["web"];
+                if (!isPlainObject(webValue)) continue;
+                const uriValue = webValue["uri"];
+                if (typeof uriValue !== "string" || !uriValue) continue;
+                const titleValue = webValue["title"];
+                sources.push({
+                    url: uriValue,
+                    title:
+                        typeof titleValue === "string" ? titleValue : undefined,
+                });
+            }
+        }
+
+        const webResultsValue = grounding["webResults"];
+        if (Array.isArray(webResultsValue)) {
+            for (const result of webResultsValue) {
+                if (!isPlainObject(result)) continue;
+                const urlValue = result["url"];
+                if (typeof urlValue !== "string" || !urlValue) continue;
+                const titleValue = result["title"];
+                sources.push({
+                    url: urlValue,
+                    title:
+                        typeof titleValue === "string" ? titleValue : undefined,
+                });
+            }
+        }
+
+        const citationsValue = grounding["citations"];
+        if (Array.isArray(citationsValue)) {
+            for (const citation of citationsValue) {
+                if (!isPlainObject(citation)) continue;
+                const uriValue = citation["uri"];
+                if (typeof uriValue !== "string" || !uriValue) continue;
+                sources.push({ url: uriValue });
+            }
+        }
+    }
+
+    const deduped = new Map<string, { url: string; title?: string }>();
+    for (const source of sources) {
+        if (!deduped.has(source.url)) {
+            deduped.set(source.url, source);
+        }
+    }
+
+    return {
+        text,
+        sources: Array.from(deduped.values()),
+    };
+}
+
+function extractTextFromCandidate(candidate: Record<string, unknown>): string {
+    const contentValue = candidate["content"];
+    if (!isPlainObject(contentValue)) {
+        return "";
+    }
+
+    const partsValue = contentValue["parts"];
+    if (!isUnknownArray(partsValue)) {
+        return "";
+    }
+
+    return partsValue
+        .map((part) => {
+            if (!isPlainObject(part)) return "";
+            const textValue = part["text"];
+            return typeof textValue === "string" ? textValue : "";
+        })
+        .filter(Boolean)
+        .join("")
+        .trim();
+}
+
+type OpenAITextPart = { type: "text"; text: string };
+
+function isOpenAITextPart(part: unknown): part is OpenAITextPart {
+    return (
+        isPlainObject(part) &&
+        part["type"] === "text" &&
+        typeof part["text"] === "string"
+    );
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isUnknownArray(value: unknown): value is unknown[] {
+    return Array.isArray(value);
 }

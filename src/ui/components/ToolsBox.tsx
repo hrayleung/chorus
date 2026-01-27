@@ -22,21 +22,94 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { useShortcut } from "@ui/hooks/useShortcut";
 import { dialogActions, useDialogStore } from "@core/infra/DialogStore";
 import * as ToolsetsAPI from "@core/chorus/api/ToolsetsAPI";
+import { useAppContext } from "@ui/hooks/useAppContext";
+import * as ModelsAPI from "@core/chorus/api/ModelsAPI";
+import { getModelName, getProviderName, ModelConfig } from "@core/chorus/Models";
 
 export const TOOLS_BOX_DIALOG_ID = "tools-box";
+
+function normalizeVertexPublisherModelNameForWebSearch(modelName: string) {
+    const trimmed = modelName.trim();
+    if (!trimmed) return trimmed;
+
+    const publishersMatch = trimmed.match(/^publishers\/([^/]+)\/models\/(.+)$/);
+    if (publishersMatch) {
+        return `${publishersMatch[1]}/${publishersMatch[2]}`;
+    }
+
+    const fullMatch = trimmed.match(
+        /^projects\/[^/]+\/locations\/[^/]+\/publishers\/([^/]+)\/models\/(.+)$/,
+    );
+    if (fullMatch) {
+        return `${fullMatch[1]}/${fullMatch[2]}`;
+    }
+
+    const modelsMatch = trimmed.match(/^models\/(.+)$/);
+    if (modelsMatch) {
+        return `google/${modelsMatch[1]}`;
+    }
+
+    if (trimmed.includes("/")) {
+        return trimmed;
+    }
+
+    return `google/${trimmed}`;
+}
+
+function supportsNativeWebSearch(model: ModelConfig): boolean {
+    const provider = getProviderName(model.modelId);
+    const modelName = getModelName(model.modelId);
+
+    switch (provider) {
+        case "openai":
+            return (
+                modelName.startsWith("o") ||
+                modelName.startsWith("gpt-4o") ||
+                modelName.startsWith("gpt-4.1") ||
+                modelName.startsWith("gpt-5")
+            );
+        case "google":
+            return true;
+        case "vertex": {
+            const normalized =
+                normalizeVertexPublisherModelNameForWebSearch(modelName);
+            return (
+                normalized.startsWith("google/") &&
+                normalized.includes("gemini")
+            );
+        }
+        case "anthropic":
+            return true;
+        case "grok":
+            return modelName.startsWith("grok-4");
+        default:
+            return false;
+    }
+}
+
+type ToolsetAvailability = {
+    canEnable: boolean;
+    note?: string;
+};
 
 function ToolsetRow({
     toolset,
     config,
+    availability,
 }: {
     toolset: Toolset;
     config: ToolsetConfig | undefined;
+    availability?: ToolsetAvailability;
 }) {
     const updateMCPConfig = ToolsetsAPI.useUpdateToolsetsConfig();
 
     const isEnabled = config?.[toolset.name]?.["enabled"] === "true";
+    const canEnable = availability?.canEnable ?? true;
 
     const toggleToolset = () => {
+        if (!canEnable && !isEnabled) {
+            return;
+        }
         if (toolset.areRequiredParamsFilled(config)) {
             updateMCPConfig.mutate({
                 toolsetName: toolset.name,
@@ -113,11 +186,17 @@ function ToolsetRow({
                     <p className="text-muted-foreground">
                         {toolset.description}
                     </p>
+                    {availability?.note && (
+                        <p className="text-xs text-muted-foreground">
+                            {availability.note}
+                        </p>
+                    )}
                 </div>
             </div>
             <div className="flex items-center gap-3 ml-2">
                 {toolset.areRequiredParamsFilled(config) ? (
                     <Switch
+                        disabled={!canEnable && !isEnabled}
                         checked={isEnabled}
                         onCheckedChange={(enabled) =>
                             updateMCPConfig.mutate({
@@ -152,6 +231,10 @@ function ToolsetRow({
 function ToolsBoxContent() {
     const toolsetConfigs = ToolsetsAPI.useToolsetsConfig();
     const toolsets = ToolsetsAPI.useToolsets();
+    const { isQuickChatWindow } = useAppContext();
+    const selectedModelConfigsCompare = ModelsAPI.useSelectedModelConfigsCompare();
+    const selectedModelConfigQuickChat =
+        ModelsAPI.useSelectedModelConfigQuickChat();
 
     if (toolsetConfigs.isError || toolsets.isError) {
         return (
@@ -166,6 +249,32 @@ function ToolsBoxContent() {
         return <RetroSpinner />;
     }
 
+    const selectedModels: ModelConfig[] = isQuickChatWindow
+        ? selectedModelConfigQuickChat.data
+            ? [selectedModelConfigQuickChat.data]
+            : []
+        : selectedModelConfigsCompare.data ?? [];
+
+    const webSupport = selectedModels.map(supportsNativeWebSearch);
+    const webSupportAll = webSupport.length > 0 && webSupport.every(Boolean);
+    const webSupportAny = webSupport.some(Boolean);
+
+    const webToolsetAvailability: ToolsetAvailability = (() => {
+        if (selectedModels.length === 0) {
+            return { canEnable: true };
+        }
+        if (webSupportAll) {
+            return { canEnable: true };
+        }
+        if (webSupportAny) {
+            return {
+                canEnable: true,
+                note: "Some selected models don't support Web Search and will ignore it.",
+            };
+        }
+        return { canEnable: false, note: "Not supported by current model." };
+    })();
+
     return (
         <Command>
             <CommandInput placeholder="Search connections..." autoFocus />
@@ -179,6 +288,11 @@ function ToolsBoxContent() {
                                 key={toolset.name}
                                 toolset={toolset}
                                 config={toolsetConfigs.data}
+                                availability={
+                                    toolset.name === "web"
+                                        ? webToolsetAvailability
+                                        : undefined
+                                }
                             />
                         ))}
                 </CommandGroup>

@@ -2,13 +2,13 @@ import { appDataDir } from "@tauri-apps/api/path";
 import { mkdir, readFile } from "@tauri-apps/plugin-fs";
 import { allowedExtensions, AttachmentType } from "@core/chorus/Models";
 import { v4 as uuidv4 } from "uuid";
-import FirecrawlApp from "@mendable/firecrawl-js";
 import { fileTypeFromBuffer } from "file-type";
 import path from "path";
 import mime from "mime-types";
 import { invoke } from "@tauri-apps/api/core";
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 import { Attachment } from "./api/AttachmentsAPI";
+import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 
 // Initialize PDF.js worker
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
@@ -18,12 +18,9 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
 
 export const MAX_ATTACHMENTS = 10;
 export const MAX_SCRAPES_PER_MINUTE = 10;
+const MAX_SCRAPE_CHARS = 200_000;
 // This should match TARGET_SIZE_BYTES in src-tauri/src/command.rs (3.5MB)
 export const TARGET_IMAGE_SIZE_BYTES = 4.5 * 1024 * 1024; // 4.5MB in bytes
-
-// Create FirecrawlApp instance with provided API key
-export const createFirecrawlClient = (apiKey: string) =>
-    new FirecrawlApp({ apiKey });
 
 // Add rate limiting tracker
 export const scrapeTimestamps: number[] = [];
@@ -303,32 +300,83 @@ export const getScreenshotAttachment = async (
 export async function scrapeUrlAndWriteToPath(
     url: string,
     path: string,
-    firecrawlApiKey?: string,
 ): Promise<{ success: boolean; error?: string }> {
-    if (!firecrawlApiKey) {
-        return { success: false, error: "Firecrawl API key not configured" };
-    }
+    const normalizeUrl = (raw: string): string => {
+        const trimmed = raw.trim();
+        if (!trimmed) {
+            throw new Error("Missing URL");
+        }
+        if (/^https?:\/\//i.test(trimmed)) {
+            return trimmed;
+        }
+        return `https://${trimmed}`;
+    };
+
+    const extractTextFromHtml = (
+        html: string,
+    ): { title?: string; text: string } => {
+        try {
+            const doc = new DOMParser().parseFromString(html, "text/html");
+            const title = doc.querySelector("title")?.textContent?.trim();
+            doc.querySelectorAll("script, style, noscript").forEach((el) =>
+                el.remove(),
+            );
+            const rawText =
+                doc.body?.textContent || doc.documentElement.textContent || "";
+
+            const cleaned = rawText
+                .replace(/\r\n/g, "\n")
+                .replace(/[ \t\u00A0]+/g, " ")
+                .replace(/\n{3,}/g, "\n\n")
+                .trim();
+
+            return { title: title || undefined, text: cleaned };
+        } catch {
+            return { text: html };
+        }
+    };
+
+    const truncate = (text: string) => {
+        if (text.length <= MAX_SCRAPE_CHARS) return text;
+        return `${text.slice(0, MAX_SCRAPE_CHARS)}\n\n[truncated]`;
+    };
 
     try {
-        const firecrawl = createFirecrawlClient(firecrawlApiKey);
-        const mockScrapeAPI = false;
-        const scrapeResult = mockScrapeAPI
-            ? {
-                  success: true as const,
-                  markdown: `test ${url}`,
-              }
-            : await firecrawl.scrapeUrl(url, {
-                  formats: ["markdown"],
-              });
+        const normalizedUrl = normalizeUrl(url);
+        const response = await tauriFetch(normalizedUrl, {
+            method: "GET",
+            headers: {
+                Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "User-Agent": "Chorus",
+            },
+            maxRedirections: 5,
+            connectTimeout: 20_000,
+        });
 
-        if (!scrapeResult.success) {
+        if (!response.ok) {
+            const errorText = await response.text().catch(() => "");
             throw new Error(
-                `Failed to scrape: ${"error" in scrapeResult ? scrapeResult.error : "Unknown error"}`,
+                `HTTP ${response.status}: ${errorText || response.statusText}`,
             );
         }
 
+        const contentType = response.headers.get("content-type") || "";
+        const bodyText = await response.text();
+
+        const trimmedStart = bodyText.trim().slice(0, 64).toLowerCase();
+        const isHtml =
+            contentType.includes("html") ||
+            trimmedStart.startsWith("<!doctype html") ||
+            trimmedStart.startsWith("<html");
+
+        const { title, text } = isHtml
+            ? extractTextFromHtml(bodyText)
+            : { title: undefined, text: bodyText };
+
+        const finalText = truncate(text);
+
         const content = new TextEncoder().encode(
-            `URL: ${url}\n\n${scrapeResult.markdown}`,
+            `URL: ${normalizedUrl}${title ? `\nTitle: ${title}` : ""}\n\n${finalText}`,
         );
         await invoke("write_file_async", {
             path,

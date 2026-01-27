@@ -47,6 +47,8 @@ export function ProviderLogo({
                 return <RiOpenaiFill className="w-4 h-4" />;
             case "google":
                 return <RiGoogleFill className="w-4 h-4" />;
+            case "vertex":
+                return <RiGoogleFill className="w-4 h-4" />;
             case "perplexity":
                 return <RiPerplexityFill className="w-4 h-4" />;
             case "ollama":
@@ -77,6 +79,9 @@ export function ProviderLogo({
                         className="w-4 h-4 invert dark:invert-0"
                     />
                 );
+            case "custom_openai":
+            case "custom_anthropic":
+                return <BoxIcon className="w-4 h-4" />;
             default: {
                 // @ts-expect-error: creating unused variable to provide exhaustiveness check
                 const _unused: never = provider;

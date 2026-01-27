@@ -756,7 +756,7 @@ function AppContent() {
         void checkReviewsDialog();
     }, [db]);
 
-    // Listen for events to open API keys settings
+    // Listen for events to open Settings
     useEffect(() => {
         const unlisten = listen(
             "open_settings",
@@ -799,7 +799,7 @@ function AppContent() {
                         </AlertTitle>
                         <AlertDescription>
                             Chorus is now Open Source! It now runs on your own
-                            API keys. Add them in Settings → API Keys.
+                            API keys. Add them in Settings → Providers.
                             <br />
                             <br />
                             <div className="gap-4 mt-2">

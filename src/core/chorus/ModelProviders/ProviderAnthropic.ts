@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import {
     LLMMessage,
     readImageAttachment,
@@ -10,6 +11,11 @@ import {
 import { IProvider } from "./IProvider";
 import { canProceedWithProvider } from "@core/utilities/ProxyUtils";
 import { getUserToolNamespacedName, UserToolCall } from "@core/chorus/Toolsets";
+import {
+    clampAnthropicThinkingBudgetTokens,
+    getAnthropicMaxTokens,
+    getAnthropicModelName,
+} from "./anthropicModels";
 
 type AcceptedImageType =
     | "image/jpeg"
@@ -27,70 +33,6 @@ type MeltyAnthrMessageParam = {
     hasAttachments: boolean;
 };
 
-type AnthropicModelConfig = {
-    inputModelName: string;
-    anthropicModelName: string;
-    maxTokens: number;
-};
-
-const ANTHROPIC_MODELS: AnthropicModelConfig[] = [
-    {
-        inputModelName: "claude-3-5-sonnet-latest",
-        anthropicModelName: "claude-3-5-sonnet-latest",
-        maxTokens: 8192,
-    },
-    {
-        inputModelName: "claude-3-7-sonnet-latest",
-        anthropicModelName: "claude-3-7-sonnet-latest",
-        maxTokens: 20000,
-    },
-    {
-        inputModelName: "claude-3-7-sonnet-latest-thinking",
-        anthropicModelName: "claude-3-7-sonnet-latest",
-        maxTokens: 10000,
-    },
-    {
-        inputModelName: "claude-sonnet-4-latest",
-        // https://docs.anthropic.com/en/docs/about-claude/models/overview 0 is the new alias for latest
-        anthropicModelName: "claude-sonnet-4-0",
-        maxTokens: 10000,
-    },
-    {
-        inputModelName: "claude-sonnet-4-5-20250929",
-        anthropicModelName: "claude-sonnet-4-5-20250929",
-        maxTokens: 10000,
-    },
-    {
-        inputModelName: "claude-opus-4-latest",
-        anthropicModelName: "claude-opus-4-0",
-        maxTokens: 10000,
-    },
-    {
-        inputModelName: "claude-opus-4.1-latest",
-        anthropicModelName: "claude-opus-4-1-20250805",
-        maxTokens: 10000,
-    },
-    {
-        inputModelName: "claude-haiku-4-5-20251001",
-        anthropicModelName: "claude-haiku-4-5-20251001",
-        maxTokens: 20000,
-    },
-    {
-        inputModelName: "claude-opus-4-5-20251101",
-        anthropicModelName: "claude-opus-4-5-20251101",
-        maxTokens: 20000,
-    },
-];
-
-function getAnthropicModelName(modelName: string): string {
-    const modelConfig = ANTHROPIC_MODELS.find(
-        (m) => m.inputModelName === modelName,
-    );
-    // If not found in hardcoded list, return the model name as-is
-    // (supports dynamically fetched models from API)
-    return modelConfig?.anthropicModelName ?? modelName;
-}
-
 export class ProviderAnthropic implements IProvider {
     async streamResponse({
         modelConfig,
@@ -101,6 +43,7 @@ export class ProviderAnthropic implements IProvider {
         onError,
         additionalHeaders,
         tools,
+        enabledToolsets,
         customBaseUrl,
     }: StreamResponseParams) {
         const modelName = modelConfig.modelId.split("::")[1];
@@ -119,7 +62,18 @@ export class ProviderAnthropic implements IProvider {
 
         const messages = await convertConversationToAnthropic(llmConversation);
 
-        const isThinking = modelConfig.budgetTokens !== undefined;
+        const maxTokens = getAnthropicMaxTokens(modelName);
+        const thinkingBudgetTokens =
+            modelConfig.budgetTokens !== undefined
+                ? clampAnthropicThinkingBudgetTokens({
+                      budgetTokens: modelConfig.budgetTokens,
+                      maxTokens,
+                  })
+                : undefined;
+
+        const isThinking = thinkingBudgetTokens !== undefined;
+        const nativeWebSearchEnabled = enabledToolsets?.includes("web") ?? false;
+        const shouldUseNativeWebSearch = nativeWebSearchEnabled;
 
         // Map tools to Claude's tool format
         const anthropicTools: Anthropic.Messages.Tool[] | undefined = tools
@@ -156,38 +110,79 @@ export class ProviderAnthropic implements IProvider {
             messages,
             system: modelConfig.systemPrompt,
             stream: true,
-            max_tokens: getMaxTokens(modelName),
-            ...(isThinking && {
+            max_tokens: maxTokens,
+            ...(thinkingBudgetTokens !== undefined && {
                 thinking: {
                     type: "enabled",
-                    budget_tokens: modelConfig.budgetTokens,
+                    budget_tokens: thinkingBudgetTokens,
                 },
             }),
-            ...(tools &&
-                tools.length > 0 && {
-                    tools: anthropicTools,
-                }),
         };
+
+        const requestTools: Anthropic.Messages.Tool[] = [];
+        if (shouldUseNativeWebSearch) {
+            requestTools.push({
+                type: "web_search_20250305",
+                name: "web_search",
+            } as unknown as Anthropic.Messages.Tool);
+        }
+        if (anthropicTools && anthropicTools.length > 0) {
+            requestTools.push(...anthropicTools);
+        }
+        if (requestTools.length > 0) {
+            createParams.tools = requestTools;
+        }
 
         // Debug: Log thinking parameters
         console.log(`[ProviderAnthropic] Model: ${anthropicModelName}`);
         console.log(`[ProviderAnthropic] isThinking: ${isThinking}`);
-        console.log(`[ProviderAnthropic] modelConfig.budgetTokens: ${modelConfig.budgetTokens}`);
-        console.log(`[ProviderAnthropic] createParams.thinking:`, (createParams as unknown as Record<string, unknown>).thinking);
+        console.log(
+            `[ProviderAnthropic] modelConfig.budgetTokens: ${modelConfig.budgetTokens}`,
+        );
+        if (
+            modelConfig.budgetTokens !== undefined &&
+            thinkingBudgetTokens !== undefined &&
+            modelConfig.budgetTokens !== thinkingBudgetTokens
+        ) {
+            console.warn(
+                `[ProviderAnthropic] Clamped thinking budget_tokens from ${modelConfig.budgetTokens} to ${thinkingBudgetTokens} (max_tokens=${maxTokens}).`,
+            );
+        }
+        console.log(
+            `[ProviderAnthropic] createParams.thinking:`,
+            (createParams as unknown as Record<string, unknown>).thinking,
+        );
 
         // Configure headers
         const headers: Record<string, string> = {
             ...(additionalHeaders ?? {}),
         };
 
+        const anthropicBetaHeaderValue = shouldUseNativeWebSearch
+            ? mergeAnthropicBetaHeader(
+                  headers["anthropic-beta"],
+                  "web-search-2025-03-05",
+              )
+            : undefined;
+
         const client = new Anthropic({
             apiKey: apiKeys.anthropic,
             baseURL: customBaseUrl,
+            fetch: tauriFetch,
             dangerouslyAllowBrowser: true,
             defaultHeaders: headers,
         });
 
-        const stream = client.messages.stream(createParams);
+        const stream = client.messages.stream(
+            createParams,
+            anthropicBetaHeaderValue
+                ? {
+                      headers: {
+                          "anthropic-beta": anthropicBetaHeaderValue,
+                      },
+                  }
+                : undefined,
+        );
 
         stream.on("error", (error) => {
             console.error(
@@ -232,6 +227,20 @@ export class ProviderAnthropic implements IProvider {
 
         await onComplete(undefined, toolCalls);
     }
+}
+
+function mergeAnthropicBetaHeader(
+    existingValue: string | undefined,
+    betaToAdd: string,
+): string {
+    const betas = (existingValue ?? "")
+        .split(",")
+        .map((v) => v.trim())
+        .filter(Boolean);
+    if (!betas.includes(betaToAdd)) {
+        betas.push(betaToAdd);
+    }
+    return betas.join(", ");
 }
 
 async function formatMessageWithAttachments(
@@ -400,15 +409,6 @@ async function formatMessageWithAttachments(
         hasAttachments: attachmentBlocks.length > 0,
     };
 }
-
-const getMaxTokens = (modelId: string) => {
-    const modelConfig = ANTHROPIC_MODELS.find(
-        (m) => m.inputModelName === modelId,
-    );
-    // Return default max tokens if model not found in hardcoded list
-    // (supports dynamically fetched models from API)
-    return modelConfig?.maxTokens ?? 8192;
-};
 
 /**
  * Adds cache control block to the last message in `messages`

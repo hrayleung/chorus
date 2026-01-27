@@ -1281,6 +1281,9 @@ export function useStreamMessagePart() {
 
             // inject system prompts
             const toolsets = await getToolsets();
+            const enabledToolsets = toolsets
+                .filter((toolset) => toolset.status.status === "running")
+                .map((toolset) => toolset.name);
             const appMetadata = await queryClient.ensureQueryData({
                 queryKey: appMetadataKeys.appMetadata(),
                 queryFn: () => fetchAppMetadata(),
@@ -1301,6 +1304,7 @@ export function useStreamMessagePart() {
                 modelConfig,
                 llmConversation: conversation,
                 tools,
+                enabledToolsets,
                 onChunk,
                 onComplete,
                 onError,

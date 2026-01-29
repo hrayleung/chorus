@@ -1,4 +1,7 @@
 import Together from "together-ai";
+import type {
+    CompletionCreateParamsStreaming,
+} from "together-ai/resources/chat/completions";
 import {
     StreamResponseParams,
     LLMMessage,
@@ -49,8 +52,7 @@ export class ProviderTogether implements IProvider {
         });
 
         // Build Together.ai chat completion parameters
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const createParams: any = {
+        const createParams: CompletionCreateParamsStreaming = {
             model: modelId,
             messages,
             stream: true,
@@ -69,13 +71,12 @@ export class ProviderTogether implements IProvider {
                 : {}),
         };
 
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         const stream = await client.chat.completions.create(createParams);
 
         let fullContent = "";
         const toolCalls: UserToolCall[] = [];
         const accumulatedToolCalls: Record<
-            number,
+            string,
             {
                 id: string;
                 name: string;
@@ -84,8 +85,7 @@ export class ProviderTogether implements IProvider {
         > = {};
 
         try {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            for await (const chunk of stream as any) {
+            for await (const chunk of stream) {
                 const delta = chunk.choices[0]?.delta;
 
                 if (!delta) continue;
@@ -99,12 +99,14 @@ export class ProviderTogether implements IProvider {
                 // Handle tool calls
                 if (delta.tool_calls) {
                     for (const toolCall of delta.tool_calls) {
-                        const index = 0; // Together AI doesn't provide index in the same way
+                        // Use tool call ID as key to handle multiple concurrent tool calls
+                        const toolId = toolCall.id || "";
+                        if (!toolId) continue;
 
                         // Initialize tool call if new
-                        if (!accumulatedToolCalls[index]) {
-                            accumulatedToolCalls[index] = {
-                                id: toolCall.id || "",
+                        if (!accumulatedToolCalls[toolId]) {
+                            accumulatedToolCalls[toolId] = {
+                                id: toolId,
                                 name: toolCall.function?.name || "",
                                 arguments: "",
                             };
@@ -112,7 +114,7 @@ export class ProviderTogether implements IProvider {
 
                         // Accumulate function arguments
                         if (toolCall.function?.arguments) {
-                            accumulatedToolCalls[index].arguments +=
+                            accumulatedToolCalls[toolId].arguments +=
                                 toolCall.function.arguments;
                         }
                     }
@@ -156,12 +158,8 @@ export class ProviderTogether implements IProvider {
  */
 async function convertConversationToTogether(
     messages: LLMMessage[],
-): Promise<Array<{ role: string; content: string; tool_call_id?: string }>> {
-    const togetherMessages: Array<{
-        role: string;
-        content: string;
-        tool_call_id?: string;
-    }> = [];
+): Promise<CompletionCreateParamsStreaming["messages"]> {
+    const togetherMessages: CompletionCreateParamsStreaming["messages"] = [];
 
     for (const message of messages) {
         if (message.role === "user") {
@@ -193,11 +191,11 @@ async function convertConversationToTogether(
                 content: message.content || "",
             });
         } else if (message.role === "tool_results") {
-            // Add tool results as assistant messages for now
+            // Add tool results as tool messages
             for (const result of message.toolResults) {
                 togetherMessages.push({
                     role: "tool",
-                    content: result.content,
+                    content: result.content || "",
                     tool_call_id: result.id,
                 });
             }

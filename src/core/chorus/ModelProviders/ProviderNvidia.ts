@@ -60,14 +60,14 @@ export class ProviderNvidia implements IProvider {
             ...(tools && tools.length > 0
                 ? {
                       tools: tools.map((tool) => ({
-                          type: "function" as const,
+                          type: "function",
                           function: {
                               name: getUserToolNamespacedName(tool),
                               description: tool.description,
                               parameters: tool.inputSchema,
                           },
                       })),
-                      tool_choice: "auto" as const,
+                      tool_choice: "auto",
                   }
                 : {}),
         };
@@ -210,14 +210,14 @@ async function convertConversationToNvidia(
             const assistantMessage: OpenAI.Chat.ChatCompletionAssistantMessageParam =
                 {
                     role: "assistant",
-                    content: message.content || null,
+                    content: message.content || undefined,
                 };
 
             // Add tool calls if present
             if (message.toolCalls && message.toolCalls.length > 0) {
                 assistantMessage.tool_calls = message.toolCalls.map((tc) => ({
                     id: tc.id,
-                    type: "function" as const,
+                    type: "function",
                     function: {
                         name: tc.namespacedToolName,
                         arguments: JSON.stringify(tc.args),

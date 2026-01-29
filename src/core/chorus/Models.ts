@@ -1233,11 +1233,13 @@ export async function downloadTogetherModels(
 
         if (!response.ok) return;
 
-        const models = (await response.json()) as Array<{
+        interface TogetherModel {
             id: string;
             display_name?: string;
             type?: string;
-        }>;
+        }
+
+        const models = (await response.json()) as TogetherModel[];
 
         // Filter for chat models only
         const chatModels = models.filter(
@@ -1294,9 +1296,15 @@ export async function downloadNvidiaModels(
 
         if (!response.ok) return;
 
-        const { data: models } = (await response.json()) as {
-            data: { id: string; owned_by?: string }[];
-        };
+        interface NvidiaModelResponse {
+            data: {
+                id: string;
+                owned_by?: string;
+            }[];
+        }
+
+        const responseData = (await response.json()) as NvidiaModelResponse;
+        const models = responseData.data;
 
         for (const model of models) {
             // Determine if model supports images based on model name

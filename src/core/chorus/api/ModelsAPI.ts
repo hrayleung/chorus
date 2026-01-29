@@ -84,6 +84,8 @@ let groqDownloadPromise: Promise<void> | null = null;
 let mistralDownloadPromise: Promise<void> | null = null;
 let cerebrasDownloadPromise: Promise<void> | null = null;
 let fireworksDownloadPromise: Promise<void> | null = null;
+let togetherDownloadPromise: Promise<void> | null = null;
+let nvidiaDownloadPromise: Promise<void> | null = null;
 
 /**
  * Reset download promises for a specific provider so models can be re-fetched.
@@ -116,6 +118,12 @@ export function resetProviderDownloadPromise(provider: string) {
             break;
         case "fireworks":
             fireworksDownloadPromise = null;
+            break;
+        case "together":
+            togetherDownloadPromise = null;
+            break;
+        case "nvidia":
+            nvidiaDownloadPromise = null;
             break;
     }
 }
@@ -260,6 +268,26 @@ export async function fetchModelConfigs() {
                 apiKeys,
             );
             await fireworksDownloadPromise;
+        }
+    }
+
+    // Together.ai
+    if (apiKeys.together) {
+        if (togetherDownloadPromise) {
+            await togetherDownloadPromise;
+        } else {
+            togetherDownloadPromise = Models.downloadTogetherModels(db, apiKeys);
+            await togetherDownloadPromise;
+        }
+    }
+
+    // Nvidia
+    if (apiKeys.nvidia) {
+        if (nvidiaDownloadPromise) {
+            await nvidiaDownloadPromise;
+        } else {
+            nvidiaDownloadPromise = Models.downloadNvidiaModels(db, apiKeys);
+            await nvidiaDownloadPromise;
         }
     }
 

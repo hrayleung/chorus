@@ -330,8 +330,8 @@ importers:
         specifier: ^3.1.0
         version: 3.1.0
       together-ai:
-        specifier: ^0.8.0
-        version: 0.8.0(encoding@0.1.13)
+        specifier: ^0.33.0
+        version: 0.33.0
       turndown:
         specifier: ^7.2.0
         version: 7.2.2
@@ -11027,8 +11027,9 @@ packages:
     resolution: {integrity: sha512-FWtleNAtZ/Ki2qtqej2CXTOayOH9bHDQF+Q48VpWyDXjbYxA4Yz8iDB31zXOBUlOHHKidDbqGVrTUvQMPmBGBw==}
     engines: {node: '>=0.10.0'}
 
-  together-ai@0.8.0:
-    resolution: {integrity: sha512-w4/zlmoKM8QNOsAMYa3eKdQiWg/0w4mnRc5L7rZvXvymIQI7CRVlv+OE/YTdiCnez1TNl/Zz6UmogBXkrM2LxQ==}
+  together-ai@0.33.0:
+    resolution: {integrity: sha512-2JdxYwbw+Xw2bW2PHBGqbMTtYsQHoWO9UXvdwIfQkde/swoKp2x/hpxEjtTERzrMP4O5SdDPGxsjfcPXewDJ9A==}
+    hasBin: true
 
   toidentifier@1.0.1:
     resolution: {integrity: sha512-o5sSPKEkg/DIQNmH43V0/uerLrpzVedkUh8tGNvaeXpfpuwjKenlSox/2O/BTlZUtEe+JG7s5YhEz608PlAHRA==}
@@ -26332,17 +26333,7 @@ snapshots:
       regex-not: 1.0.2
       safe-regex: 1.1.0
 
-  together-ai@0.8.0(encoding@0.1.13):
-    dependencies:
-      '@types/node': 18.19.130
-      '@types/node-fetch': 2.6.13
-      abort-controller: 3.0.0
-      agentkeepalive: 4.6.0
-      form-data-encoder: 1.7.2
-      formdata-node: 4.4.1
-      node-fetch: 2.7.0(encoding@0.1.13)
-    transitivePeerDependencies:
-      - encoding
+  together-ai@0.33.0: {}
 
   toidentifier@1.0.1: {}
 

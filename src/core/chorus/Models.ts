@@ -489,6 +489,41 @@ export async function syncVertexModels(db: Database): Promise<void> {
                 );
             }),
     );
+
+    // Add Imagen 3 models for Vertex AI
+    const imagenModels = [
+        {
+            id: "imagen-3.0-generate-002",
+            displayName: "Imagen 3.0 Generate (Vertex)",
+            supportedAttachmentTypes: ["text"],
+        },
+        {
+            id: "imagen-3.0-capability-001",
+            displayName: "Imagen 3.0 Capability (Vertex)",
+            supportedAttachmentTypes: ["text", "image"], // Supports image editing with masks
+        },
+    ];
+
+    await Promise.all(
+        imagenModels.map((model) => {
+            return saveModelAndDefaultConfig(
+                db,
+                {
+                    id: `vertex::${model.id}`,
+                    displayName: model.displayName,
+                    supportedAttachmentTypes: model.supportedAttachmentTypes as AttachmentType[],
+                    isEnabled: true,
+                    isInternal: false,
+                },
+                model.displayName,
+                {
+                    // Imagen 3 pricing on Vertex AI
+                    promptPricePerToken: 0,
+                    completionPricePerToken: 120 / 1_000_000, // $120 per 1M image tokens
+                },
+            );
+        }),
+    );
 }
 
 export async function syncCustomProviderModels(db: Database): Promise<void> {
@@ -921,6 +956,77 @@ export async function downloadGoogleModels(
                     isInternal: false,
                 },
                 model.displayName || modelId,
+            );
+        }
+
+        // Add Imagen 3 image generation models (not returned by models API)
+        const imagenModels = [
+            {
+                id: "imagen-4.0-generate-001",
+                displayName: "Imagen 3 Standard",
+                supportedAttachmentTypes: ["text"],
+            },
+            {
+                id: "imagen-4.0-ultra-generate-001",
+                displayName: "Imagen 3 Ultra",
+                supportedAttachmentTypes: ["text"],
+            },
+            {
+                id: "imagen-4.0-fast-generate-001",
+                displayName: "Imagen 3 Fast",
+                supportedAttachmentTypes: ["text"],
+            },
+        ];
+
+        for (const model of imagenModels) {
+            await saveModelAndDefaultConfig(
+                db,
+                {
+                    id: `google::${model.id}`,
+                    displayName: model.displayName,
+                    supportedAttachmentTypes: model.supportedAttachmentTypes as AttachmentType[],
+                    isEnabled: true,
+                    isInternal: false,
+                },
+                model.displayName,
+                {
+                    // Imagen 3 pricing
+                    promptPricePerToken: 0, // Text prompt is free
+                    completionPricePerToken: 120, // $120 per 1M image tokens
+                },
+            );
+        }
+
+        // Add Gemini 3 Pro Image (Nano Banana Pro) models
+        const geminiImageModels = [
+            {
+                id: "gemini-2.5-flash-image-preview",
+                displayName: "Gemini 2.5 Flash Image (Nano Banana)",
+                supportedAttachmentTypes: ["text", "image"],
+            },
+            {
+                id: "gemini-3-pro-image-preview",
+                displayName: "Gemini 3 Pro Image (Nano Banana Pro)",
+                supportedAttachmentTypes: ["text", "image"],
+            },
+        ];
+
+        for (const model of geminiImageModels) {
+            await saveModelAndDefaultConfig(
+                db,
+                {
+                    id: `google::${model.id}`,
+                    displayName: model.displayName,
+                    supportedAttachmentTypes: model.supportedAttachmentTypes as AttachmentType[],
+                    isEnabled: true,
+                    isInternal: false,
+                },
+                model.displayName,
+                {
+                    // Gemini 3 Pro Image pricing
+                    promptPricePerToken: 2.0 / 1_000_000, // $2.00 per 1M tokens
+                    completionPricePerToken: 120 / 1_000_000, // $120 per 1M image tokens ($12/1M text tokens)
+                },
             );
         }
     } catch (error) {

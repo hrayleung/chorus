@@ -1217,6 +1217,8 @@ export default function Settings({ tab = "general" }: SettingsProps) {
         ModelsAPI.resetProviderDownloadPromise(provider);
         // Invalidate the API keys query so components using useApiKeys will refresh
         void queryClient.invalidateQueries({ queryKey: ["apiKeys"] });
+        // Invalidate models query to refresh model lists in ApiKeysForm
+        void queryClient.invalidateQueries({ queryKey: ["models"] });
         // Invalidate model configs to trigger re-fetch with new API key
         void queryClient.invalidateQueries({ queryKey: ["modelConfigs"] });
     };

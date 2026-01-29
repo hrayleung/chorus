@@ -63,6 +63,7 @@ import { UNIVERSAL_SYSTEM_PROMPT_DEFAULT } from "@core/chorus/prompts/prompts";
 import { CustomToolsetConfig, getEnvFromJSON } from "@core/chorus/Toolsets";
 import * as ToolsetsAPI from "@core/chorus/api/ToolsetsAPI";
 import * as ModelsAPI from "@core/chorus/api/ModelsAPI";
+import * as Models from "@core/chorus/Models";
 import { useQueryClient } from "@tanstack/react-query";
 import { useReactQueryAutoSync } from "use-react-query-auto-sync";
 import { RiClaudeFill, RiSupabaseFill } from "react-icons/ri";
@@ -1208,6 +1209,9 @@ export default function Settings({ tab = "general" }: SettingsProps) {
             ...currentSettings,
             apiKeys: newApiKeys,
         });
+
+        // Clear all models for this provider when API key changes
+        await Models.deleteProviderModels(db, provider);
 
         // Reset the download promise so models can be re-fetched
         ModelsAPI.resetProviderDownloadPromise(provider);

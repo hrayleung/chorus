@@ -1210,17 +1210,22 @@ export default function Settings({ tab = "general" }: SettingsProps) {
             apiKeys: newApiKeys,
         });
 
-        // Clear all models for this provider when API key changes
-        await Models.deleteProviderModels(db, provider);
-
-        // Reset the download promise so models can be re-fetched
-        ModelsAPI.resetProviderDownloadPromise(provider);
-        // Invalidate the API keys query so components using useApiKeys will refresh
-        void queryClient.invalidateQueries({ queryKey: ["apiKeys"] });
-        // Invalidate models query to refresh model lists in ApiKeysForm
-        void queryClient.invalidateQueries({ queryKey: ["models"] });
-        // Invalidate model configs to trigger re-fetch with new API key
-        void queryClient.invalidateQueries({ queryKey: ["modelConfigs"] });
+        try {
+            // Clear all models for this provider when API key changes
+            await Models.deleteProviderModels(db, provider);
+        } catch (error) {
+            console.error("Failed to clear provider models", error);
+            toast.error("Failed to clear provider models");
+        } finally {
+            // Reset the download promise so models can be re-fetched
+            ModelsAPI.resetProviderDownloadPromise(provider);
+            // Invalidate the API keys query so components using useApiKeys will refresh
+            void queryClient.invalidateQueries({ queryKey: ["apiKeys"] });
+            // Invalidate models query to refresh model lists in ApiKeysForm
+            void queryClient.invalidateQueries({ queryKey: ["models"] });
+            // Invalidate model configs to trigger re-fetch with new API key
+            void queryClient.invalidateQueries({ queryKey: ["modelConfigs"] });
+        }
     };
 
     useEffect(() => {

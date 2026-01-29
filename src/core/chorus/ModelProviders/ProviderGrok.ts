@@ -169,20 +169,38 @@ export class ProviderGrok implements IProvider {
             }
         }
 
+        // Grok 3 Mini is the only model that supports configurable reasoning effort control
+        // Per Roo Code docs: "only the Grok 3 Mini models support configurable reasoning effort control"
+        // Other models (grok-4, grok-4-fast, grok-4-1-fast, grok-code-fast-1, grok-3, grok-3-fast)
+        // are reasoning-capable but don't expose the reasoning_effort parameter
+        const isGrok3Mini = modelName.includes("grok-3-mini");
+
         const streamParams: OpenAI.ChatCompletionCreateParamsStreaming & {
-            include_reasoning: boolean;
+            include_reasoning?: boolean;
             reasoning_effort?: string;
         } = {
             model: modelName,
             messages,
             stream: true,
-            include_reasoning: true,
         };
 
-        // Add reasoning_effort for Grok 3 Mini models
-        const isGrok3Mini = modelName.includes("grok-3-mini");
-        if (isGrok3Mini && modelConfig.reasoningEffort) {
-            streamParams.reasoning_effort = modelConfig.reasoningEffort;
+        // Only Grok 3 Mini supports reasoning effort control
+        if (isGrok3Mini) {
+            // Always include reasoning traces for Grok 3 Mini
+            streamParams.include_reasoning = true;
+
+            // Map effort levels to supported values
+            // Grok 3 Mini only supports: "low" | "high"
+            if (modelConfig.reasoningEffort) {
+                const effortMap: Record<string, string> = {
+                    low: "low",
+                    medium: "high", // medium maps to high
+                    high: "high",
+                    xhigh: "high", // xhigh maps to high
+                };
+                streamParams.reasoning_effort =
+                    effortMap[modelConfig.reasoningEffort] || "low";
+            }
         }
 
         // Debug: Log reasoning parameters
@@ -192,9 +210,22 @@ export class ProviderGrok implements IProvider {
             `[ProviderGrok] modelConfig.reasoningEffort: ${modelConfig.reasoningEffort}`,
         );
         console.log(
+            `[ProviderGrok] streamParams.include_reasoning:`,
+            streamParams.include_reasoning,
+        );
+        console.log(
             `[ProviderGrok] streamParams.reasoning_effort:`,
             streamParams.reasoning_effort,
         );
+        if (isGrok3Mini && modelConfig.reasoningEffort) {
+            const originalEffort = modelConfig.reasoningEffort;
+            const mappedEffort = streamParams.reasoning_effort;
+            if (originalEffort !== mappedEffort) {
+                console.log(
+                    `[ProviderGrok] Note: Grok 3 Mini only supports "low" and "high". Mapped "${originalEffort}" to "${mappedEffort}".`,
+                );
+            }
+        }
 
         try {
             const stream = await client.chat.completions.create(streamParams);

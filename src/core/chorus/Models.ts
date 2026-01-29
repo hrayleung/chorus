@@ -434,6 +434,25 @@ export async function saveModelAndDefaultConfig(
     );
 }
 
+/**
+ * Deletes all models and model configs for a specific provider.
+ * This should be called when an API key changes to clear old models.
+ */
+export async function deleteProviderModels(
+    db: Database,
+    provider: string,
+): Promise<void> {
+    // Delete from model_configs first (child table)
+    await db.execute(
+        `DELETE FROM model_configs WHERE model_id LIKE ?`,
+        [`${provider}::%`],
+    );
+    // Then delete from models (parent table)
+    await db.execute(`DELETE FROM models WHERE id LIKE ?`, [
+        `${provider}::%`,
+    ]);
+}
+
 function hasVertexCredentials(vertex: VertexAISettings): boolean {
     return Boolean(
         vertex.projectId.trim() &&

@@ -6,6 +6,9 @@ import OpenAICompletionsAPIUtils from "@core/chorus/OpenAICompletionsAPIUtils";
 import { canProceedWithProvider } from "@core/utilities/ProxyUtils";
 import JSON5 from "json5";
 import { fetch } from "@tauri-apps/plugin-http";
+import { writeFile, mkdir } from "@tauri-apps/plugin-fs";
+import { join, appDataDir } from "@tauri-apps/api/path";
+import { convertFileSrc } from "@tauri-apps/api/core";
 
 interface ProviderError {
     message: string;
@@ -86,6 +89,36 @@ export class ProviderGoogle implements IProvider {
         const googleApiKey = apiKeys.google;
         if (!googleApiKey) {
             throw new Error("Please add your Google AI API key in Settings.");
+        }
+
+        // Check if this is an image generation model
+        const isImagenModel = modelName.startsWith("imagen-");
+        const isGeminiImageModel = modelName.includes("-image-preview");
+
+        if (isImagenModel) {
+            // Use Imagen API for text-to-image generation
+            await generateImageWithImagen({
+                modelName,
+                llmConversation,
+                apiKey: googleApiKey,
+                onChunk,
+                onComplete,
+                onError,
+            });
+            return;
+        }
+
+        if (isGeminiImageModel) {
+            // Use Gemini with image generation capabilities
+            await generateImageWithGemini({
+                modelName,
+                llmConversation,
+                apiKey: googleApiKey,
+                onChunk,
+                onComplete,
+                onError,
+            });
+            return;
         }
 
         const nativeWebSearchEnabled =
@@ -517,4 +550,196 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 function isUnknownArray(value: unknown): value is unknown[] {
     return Array.isArray(value);
+}
+
+/**
+ * Generate image using Imagen API (imagen-4.0 models)
+ */
+async function generateImageWithImagen(params: {
+    modelName: string;
+    llmConversation: StreamResponseParams["llmConversation"];
+    apiKey: string;
+    onChunk: StreamResponseParams["onChunk"];
+    onComplete: StreamResponseParams["onComplete"];
+    onError: StreamResponseParams["onError"];
+}): Promise<void> {
+    try {
+        // Get the last user message as the prompt
+        const lastMessage = params.llmConversation[params.llmConversation.length - 1];
+        if (!lastMessage || lastMessage.role !== "user") {
+            throw new Error("No user prompt found for image generation");
+        }
+
+        const prompt = lastMessage.content;
+
+        // Call Imagen API
+        const response = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/${params.modelName}:predict`,
+            {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "x-goog-api-key": params.apiKey,
+                },
+                body: JSON.stringify({
+                    instances: [{ prompt }],
+                    parameters: {
+                        sampleCount: 1,
+                    },
+                }),
+            },
+        );
+
+        if (!response.ok) {
+            const errorData = await response.text();
+            throw new Error(`Imagen API error: ${errorData}`);
+        }
+
+        const data = (await response.json()) as {
+            predictions?: Array<{ bytesBase64Encoded?: string }>;
+        };
+
+        if (!data.predictions || data.predictions.length === 0) {
+            throw new Error("No image generated");
+        }
+
+        const imageData = data.predictions[0]?.bytesBase64Encoded;
+        if (!imageData) {
+            throw new Error("No image data in response");
+        }
+
+        // Save image to disk
+        const imagePath = await saveBase64Image(imageData, prompt);
+
+        // Return markdown with image
+        const imageUrl = convertFileSrc(imagePath);
+        params.onChunk(`![Generated Image](${imageUrl})\n\nImage saved to: ${imagePath}`);
+        await params.onComplete();
+    } catch (error) {
+        console.error("Error generating image with Imagen:", error);
+        params.onError(getErrorMessage(error));
+    }
+}
+
+/**
+ * Generate image using Gemini with image generation capabilities
+ */
+async function generateImageWithGemini(params: {
+    modelName: string;
+    llmConversation: StreamResponseParams["llmConversation"];
+    apiKey: string;
+    onChunk: StreamResponseParams["onChunk"];
+    onComplete: StreamResponseParams["onComplete"];
+    onError: StreamResponseParams["onError"];
+}): Promise<void> {
+    try {
+        // Get the last user message as the prompt
+        const lastMessage = params.llmConversation[params.llmConversation.length - 1];
+        if (!lastMessage || lastMessage.role !== "user") {
+            throw new Error("No user prompt found for image generation");
+        }
+
+        const prompt = lastMessage.content;
+
+        // Build contents array for Gemini API
+        const contents = [
+            {
+                role: "user",
+                parts: [{ text: prompt }],
+            },
+        ];
+
+        // Call Gemini API with response_modalities: ["IMAGE"]
+        const response = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/${params.modelName}:generateContent`,
+            {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "x-goog-api-key": params.apiKey,
+                },
+                body: JSON.stringify({
+                    contents,
+                    generationConfig: {
+                        responseModalities: ["IMAGE"],
+                    },
+                }),
+            },
+        );
+
+        if (!response.ok) {
+            const errorData = await response.text();
+            throw new Error(`Gemini API error: ${errorData}`);
+        }
+
+        const data = (await response.json()) as {
+            candidates?: Array<{
+                content?: {
+                    parts?: Array<{
+                        inlineData?: {
+                            data?: string;
+                            mimeType?: string;
+                        };
+                    }>;
+                };
+            }>;
+        };
+
+        // Extract image from response
+        const candidate = data.candidates?.[0];
+        const parts = candidate?.content?.parts;
+        const imagePart = parts?.find((part) => part.inlineData?.data);
+
+        if (!imagePart?.inlineData?.data) {
+            throw new Error("No image generated");
+        }
+
+        const imageData = imagePart.inlineData.data;
+
+        // Save image to disk
+        const imagePath = await saveBase64Image(imageData, prompt);
+
+        // Return markdown with image
+        const imageUrl = convertFileSrc(imagePath);
+        params.onChunk(`![Generated Image](${imageUrl})\n\nImage saved to: ${imagePath}`);
+        await params.onComplete();
+    } catch (error) {
+        console.error("Error generating image with Gemini:", error);
+        params.onError(getErrorMessage(error));
+    }
+}
+
+/**
+ * Save base64 image data to disk and return file path
+ */
+async function saveBase64Image(
+    base64Data: string,
+    prompt: string,
+): Promise<string> {
+    // Decode base64 to bytes
+    const byteString = atob(base64Data);
+    const byteArray = new Uint8Array(byteString.length);
+    for (let i = 0; i < byteString.length; i++) {
+        byteArray[i] = byteString.charCodeAt(i);
+    }
+
+    // Create directory for generated images
+    const appCoreDir = await appDataDir();
+    const imagesDir = await join(appCoreDir, "generated_images");
+    await mkdir(imagesDir, { recursive: true });
+
+    // Generate filename
+    const timestamp = Date.now().toString().slice(-5);
+    const slugifiedPrompt = prompt
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 100);
+    const fileName = `${slugifiedPrompt}-${timestamp}.png`;
+    const filePath = await join(imagesDir, fileName);
+
+    // Write file
+    await writeFile(filePath, byteArray);
+
+    return filePath;
 }

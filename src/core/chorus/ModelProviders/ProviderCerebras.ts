@@ -196,12 +196,16 @@ export class ProviderCerebras implements IProvider {
         // in <think>, the final answer gets stuck inside the think block. To avoid that, buffer
         // reasoning until we see meaningful `content` deltas, and only then render it as a
         // <think> block.
+        // Don't assume content is "real answer" until we have at least a couple of non-whitespace
+        // characters; some endpoints emit tiny/stray `content` deltas even when the actual answer
+        // is streamed via a reasoning field.
+        const MIN_CONTENT_CHARS_BEFORE_FLUSH = 2;
         let sawMeaningfulContent = false;
         let bufferingReasoning = false;
         let reasoningStartedAtMs: number | undefined;
         let reasoningHasNativeTags = false;
         let reasoningBuffer = "";
-        let pendingContentPrefix = "";
+        let pendingContentBuffer = "";
 
         const resetReasoningBuffer = () => {
             bufferingReasoning = false;
@@ -310,19 +314,20 @@ export class ProviderCerebras implements IProvider {
             }
 
             if (typeof delta?.content === "string" && delta.content) {
-                const isMeaningful = isMeaningfulTextDelta(delta.content);
-                if (isMeaningful && !sawMeaningfulContent) {
-                    sawMeaningfulContent = true;
-                    flushBufferedReasoningAsThink();
-                    if (pendingContentPrefix) {
-                        onChunk(pendingContentPrefix);
-                        pendingContentPrefix = "";
-                    }
-                }
+                if (!sawMeaningfulContent && bufferingReasoning) {
+                    pendingContentBuffer += delta.content;
 
-                if (!sawMeaningfulContent && bufferingReasoning && !isMeaningful) {
-                    pendingContentPrefix += delta.content;
+                    if (
+                        pendingContentBuffer.trim().length >=
+                        MIN_CONTENT_CHARS_BEFORE_FLUSH
+                    ) {
+                        sawMeaningfulContent = true;
+                        flushBufferedReasoningAsThink();
+                        onChunk(pendingContentBuffer);
+                        pendingContentBuffer = "";
+                    }
                 } else {
+                    sawMeaningfulContent ||= isMeaningfulTextDelta(delta.content);
                     onChunk(delta.content);
                 }
             }
@@ -331,12 +336,19 @@ export class ProviderCerebras implements IProvider {
         if (sawMeaningfulContent) {
             flushBufferedReasoningAsThink();
         } else {
-            if (pendingContentPrefix) {
-                onChunk(pendingContentPrefix);
-                pendingContentPrefix = "";
+            const pending = pendingContentBuffer;
+            pendingContentBuffer = "";
+            const pendingIsWhitespace = pending.trim().length === 0;
+
+            // No `content` was ever streamed (or it never crossed our minimum); treat reasoning
+            // as the actual answer.
+            if (pending && pendingIsWhitespace) {
+                onChunk(pending);
             }
-            // No `content` was ever streamed; treat reasoning as the actual answer.
             flushBufferedReasoningAsContent();
+            if (pending && !pendingIsWhitespace) {
+                onChunk(pending);
+            }
         }
 
         const toolCalls = OpenAICompletionsAPIUtils.convertToolCalls(

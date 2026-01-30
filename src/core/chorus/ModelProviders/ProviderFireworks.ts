@@ -157,7 +157,12 @@ export class ProviderFireworks implements IProvider {
             return { thinking, answer };
         };
 
-        if (modelConfig.showThoughts) {
+        const showThoughts =
+            Boolean(modelConfig.showThoughts) ||
+            (modelConfig.reasoningEffort !== undefined &&
+                modelConfig.reasoningEffort !== null);
+
+        if (showThoughts) {
             // Fireworks streams reasoning in `reasoning_content` when enabled.
             // Default to medium when user hasn't set anything.
             params.reasoning_effort = normalizedEffort(
@@ -227,10 +232,7 @@ export class ProviderFireworks implements IProvider {
         } catch (error) {
             // Some Fireworks models reject reasoning_effort="none".
             // If disabling reasoning fails, retry once without the param.
-            if (
-                !modelConfig.showThoughts &&
-                params.reasoning_effort === "none"
-            ) {
+            if (!showThoughts && params.reasoning_effort === "none") {
                 delete params.reasoning_effort;
                 stream = await client.chat.completions.create(params);
             } else {
@@ -253,7 +255,7 @@ export class ProviderFireworks implements IProvider {
                       ? delta.reasoning
                       : undefined;
 
-            if (modelConfig.showThoughts && reasoningDelta) {
+            if (showThoughts && reasoningDelta) {
                 sawNativeReasoning = true;
                 reasoningBuffer += reasoningDelta;
 
@@ -399,7 +401,7 @@ export class ProviderFireworks implements IProvider {
 
             if (typeof delta?.content === "string" && delta.content) {
                 sawContent = true;
-                if (modelConfig.showThoughts) {
+                if (showThoughts) {
                     if (reasoningStreamMode === "unknown") {
                         // If we got here, we buffered a little reasoning but haven't decided how to render it.
                         // No native markup detected, so default to wrapped.
@@ -424,7 +426,7 @@ export class ProviderFireworks implements IProvider {
             }
         }
 
-        if (modelConfig.showThoughts) {
+        if (showThoughts) {
             if (reasoningStreamMode === "unknown") {
                 // Stream ended before we hit our buffering threshold; check for native markup.
                 if (detectNativeThinkMarkup(nativeProbe)) {
@@ -464,7 +466,7 @@ export class ProviderFireworks implements IProvider {
         // In that case, surface the buffered text as the main output too so users aren't left
         // with an empty assistant message. Skip this if we already handled native tags or if we're redacting.
         if (
-            modelConfig.showThoughts &&
+            showThoughts &&
             !sawContent &&
             !nativeThinkDetected &&
             !shouldRedactReasoning

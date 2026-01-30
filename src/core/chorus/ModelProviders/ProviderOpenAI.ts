@@ -67,7 +67,10 @@ export class ProviderOpenAI implements IProvider {
             modelId.startsWith("o"); // All o-series models support reasoning
 
         const shouldRequestReasoningSummary =
-            Boolean(modelConfig.showThoughts) && isReasoningModel;
+            isReasoningModel &&
+            (Boolean(modelConfig.showThoughts) ||
+                (modelConfig.reasoningEffort !== undefined &&
+                    modelConfig.reasoningEffort !== null));
 
         // Add system message if needed
         let systemContent = "";

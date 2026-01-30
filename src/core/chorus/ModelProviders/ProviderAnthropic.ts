@@ -270,7 +270,13 @@ export class ProviderAnthropic implements IProvider {
                     blockType === "redacted_thinking"
                 ) {
                     const deltaText =
-                        typeof ev.delta?.text === "string" ? ev.delta.text : "";
+                        typeof ev.delta?.text === "string"
+                            ? ev.delta.text
+                            : typeof (ev.delta as { thinking?: unknown })
+                                    ?.thinking === "string"
+                              ? ((ev.delta as { thinking: string }).thinking ??
+                                "")
+                              : "";
 
                     if (!inThinkingBlock) {
                         inThinkingBlock = true;

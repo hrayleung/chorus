@@ -333,12 +333,17 @@ export class ProviderVertex implements IProvider {
         const isGemini3 = modelName.includes("gemini-3");
         const isGemini25 = modelName.includes("gemini-2.5");
 
-        const showThoughts = Boolean(modelConfig.showThoughts);
+        const includeThoughts =
+            Boolean(modelConfig.showThoughts) ||
+            (isGemini3 &&
+                modelConfig.thinkingLevel !== undefined &&
+                modelConfig.thinkingLevel !== null) ||
+            (isGemini25 && modelConfig.budgetTokens !== undefined);
 
         const thinkingEnabled =
-            (isGemini3 && (modelConfig.thinkingLevel || showThoughts)) ||
+            (isGemini3 && (modelConfig.thinkingLevel || includeThoughts)) ||
             (isGemini25 &&
-                (modelConfig.budgetTokens !== undefined || showThoughts));
+                (modelConfig.budgetTokens !== undefined || includeThoughts));
 
         if (thinkingEnabled) {
             const thinkingConfig: Record<string, unknown> = {};
@@ -350,13 +355,13 @@ export class ProviderVertex implements IProvider {
                 thinkingConfig.thinking_budget = modelConfig.budgetTokens ?? -1;
             }
 
-            if (showThoughts) {
+            if (includeThoughts) {
                 thinkingConfig.include_thoughts = true;
             }
 
             const googleExtra: Record<string, unknown> = {
                 thinking_config: thinkingConfig,
-                ...(showThoughts ? { thought_tag_marker: "think" } : {}),
+                ...(includeThoughts ? { thought_tag_marker: "think" } : {}),
             };
 
             streamParams.extra_body = {
@@ -406,7 +411,7 @@ export class ProviderVertex implements IProvider {
                 };
 
                 let reasoningDelta: string | undefined;
-                if (showThoughts && isVertexDelta(delta)) {
+                if (includeThoughts && isVertexDelta(delta)) {
                     if (typeof delta.reasoning_content === "string") {
                         reasoningDelta = delta.reasoning_content;
                     } else if (typeof delta.reasoning === "string") {
@@ -415,7 +420,7 @@ export class ProviderVertex implements IProvider {
                 }
 
                 // Vertex may return thoughts in a separate reasoning field OR inline via <thought>/<think> tags.
-                if (showThoughts && reasoningDelta) {
+                if (includeThoughts && reasoningDelta) {
                     if (!inReasoning) {
                         inReasoning = true;
                         reasoningStartedAtMs = Date.now();

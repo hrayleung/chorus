@@ -137,26 +137,60 @@ export class ProviderCerebras implements IProvider {
         }
 
         const chunks: OpenAI.ChatCompletionChunk[] = [];
-        let inReasoning = false;
-        let reasoningStartedAtMs: number | undefined;
-        let reasoningHasNativeTags = false; // Track if reasoning field already contains <think> tags
+        const hasNativeThinkTags = (text: string) => {
+            return (
+                text.includes("<think") ||
+                text.includes("</think") ||
+                text.includes("<thought") ||
+                text.includes("</thought")
+            );
+        };
 
-        const closeReasoning = () => {
-            if (!inReasoning) return;
-            inReasoning = false;
-            if (!reasoningHasNativeTags) {
-                // Only add closing tag if we added the opening tag
-                onChunk("</think>");
-                if (reasoningStartedAtMs !== undefined) {
-                    const seconds = Math.max(
-                        1,
-                        Math.round((Date.now() - reasoningStartedAtMs) / 1000),
-                    );
-                    onChunk(`<thinkmeta seconds="${seconds}"/>`);
-                }
-            }
+        // Some OpenAI-compatible endpoints stream all assistant text in a reasoning field
+        // (with no `content`). If we eagerly wrap reasoning deltas in <think>, the final
+        // answer gets stuck inside the think block. To avoid that, buffer reasoning until
+        // we see real `content` deltas, and only then render it as a <think> block.
+        let sawContent = false;
+        let bufferingReasoning = false;
+        let reasoningStartedAtMs: number | undefined;
+        let reasoningHasNativeTags = false;
+        let reasoningBuffer = "";
+        let passthroughNativeThinkMarkup = false;
+
+        const resetReasoningBuffer = () => {
+            bufferingReasoning = false;
             reasoningStartedAtMs = undefined;
             reasoningHasNativeTags = false;
+            reasoningBuffer = "";
+        };
+
+        const flushBufferedReasoningAsThink = () => {
+            if (!reasoningBuffer) return;
+
+            if (reasoningHasNativeTags) {
+                // Model provided its own <think> markup; stream it as-is.
+                onChunk(reasoningBuffer);
+                resetReasoningBuffer();
+                return;
+            }
+
+            onChunk("<think>");
+            onChunk(reasoningBuffer);
+            onChunk("</think>");
+            if (reasoningStartedAtMs !== undefined) {
+                const seconds = Math.max(
+                    1,
+                    Math.round((Date.now() - reasoningStartedAtMs) / 1000),
+                );
+                onChunk(`<thinkmeta seconds="${seconds}"/>`);
+            }
+            resetReasoningBuffer();
+        };
+
+        const flushBufferedReasoningAsContent = () => {
+            if (!reasoningBuffer) return;
+            onChunk(reasoningBuffer);
+            resetReasoningBuffer();
         };
         let stream: AsyncIterable<OpenAI.ChatCompletionChunk>;
         try {
@@ -197,31 +231,44 @@ export class ProviderCerebras implements IProvider {
                       : undefined;
 
             if (shouldShowThoughts && reasoningDelta) {
-                if (!inReasoning) {
-                    inReasoning = true;
-                    reasoningStartedAtMs = Date.now();
-                    // Check if reasoning already contains native <think> tags
-                    const hasNativeTags =
-                        reasoningDelta.includes("<think") ||
-                        reasoningDelta.includes("</think") ||
-                        reasoningDelta.includes("<thought");
-                    reasoningHasNativeTags = hasNativeTags;
-
-                    // Only add our <think> tag if model didn't provide one
-                    if (!hasNativeTags) {
-                        onChunk("<think>");
+                // If the model streams native <think> markup in the reasoning field, pass it through
+                // immediately so the UI can render it. Otherwise, buffer until we see `content`.
+                if (!passthroughNativeThinkMarkup) {
+                    if (!bufferingReasoning) {
+                        bufferingReasoning = true;
+                        reasoningStartedAtMs = Date.now();
                     }
+                    reasoningHasNativeTags ||=
+                        hasNativeThinkTags(reasoningDelta);
+                    reasoningBuffer += reasoningDelta;
+
+                    if (reasoningHasNativeTags) {
+                        passthroughNativeThinkMarkup = true;
+                        onChunk(reasoningBuffer);
+                        resetReasoningBuffer();
+                    }
+                } else {
+                    onChunk(reasoningDelta);
                 }
-                onChunk(reasoningDelta);
             }
 
             if (typeof delta?.content === "string" && delta.content) {
-                closeReasoning();
+                sawContent = true;
+                if (!passthroughNativeThinkMarkup) {
+                    flushBufferedReasoningAsThink();
+                }
                 onChunk(delta.content);
             }
         }
 
-        closeReasoning();
+        if (!passthroughNativeThinkMarkup) {
+            if (sawContent) {
+                flushBufferedReasoningAsThink();
+            } else {
+                // No `content` was ever streamed; treat reasoning as the actual answer.
+                flushBufferedReasoningAsContent();
+            }
+        }
 
         const toolCalls = OpenAICompletionsAPIUtils.convertToolCalls(
             chunks,

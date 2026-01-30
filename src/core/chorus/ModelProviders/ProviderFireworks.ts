@@ -117,24 +117,42 @@ export class ProviderFireworks implements IProvider {
             );
         };
 
-        const stripNativeThinkTags = (text: string): { thinking: string; answer: string } => {
+        const stripNativeThinkTags = (
+            text: string,
+        ): { thinking: string; answer: string } => {
             // Extract content inside <think>...</think> or <thought>...</thought>
-            const thinkMatch = text.match(/<think(?:\s+[^>]*?)?>([\s\S]*?)<\/think\s*>/i);
-            const thoughtMatch = text.match(/<thought(?:\s+[^>]*?)?>([\s\S]*?)<\/thought\s*>/i);
+            const thinkMatch = text.match(
+                /<think(?:\s+[^>]*?)?>([\s\S]*?)<\/think\s*>/i,
+            );
+            const thoughtMatch = text.match(
+                /<thought(?:\s+[^>]*?)?>([\s\S]*?)<\/thought\s*>/i,
+            );
 
             let thinking = "";
             let remainingText = text;
 
             if (thinkMatch) {
                 thinking = thinkMatch[1].trim();
-                remainingText = text.replace(/<think(?:\s+[^>]*?)?>([\s\S]*?)<\/think\s*>/gi, "").trim();
+                remainingText = text
+                    .replace(
+                        /<think(?:\s+[^>]*?)?>([\s\S]*?)<\/think\s*>/gi,
+                        "",
+                    )
+                    .trim();
             } else if (thoughtMatch) {
                 thinking = thoughtMatch[1].trim();
-                remainingText = text.replace(/<thought(?:\s+[^>]*?)?>([\s\S]*?)<\/thought\s*>/gi, "").trim();
+                remainingText = text
+                    .replace(
+                        /<thought(?:\s+[^>]*?)?>([\s\S]*?)<\/thought\s*>/gi,
+                        "",
+                    )
+                    .trim();
             }
 
             // Remove <thinkmeta> tags from remaining text
-            const answer = remainingText.replace(/<thinkmeta\s+[^>]*?\/>/gi, "").trim();
+            const answer = remainingText
+                .replace(/<thinkmeta\s+[^>]*?\/>/gi, "")
+                .trim();
 
             return { thinking, answer };
         };
@@ -274,13 +292,19 @@ export class ProviderFireworks implements IProvider {
                             .replace(/<thought(?:\s+[^>]*?)?>/gi, "");
 
                         // Check if we've hit the closing tag
-                        const closingTagMatch = textToProcess.match(/<\/(think|thought)\s*>/i);
+                        const closingTagMatch = textToProcess.match(
+                            /<\/(think|thought)\s*>/i,
+                        );
                         if (closingTagMatch) {
                             nativeThinkClosed = true;
-                            const parts = textToProcess.split(/<\/(think|thought)\s*>/i);
+                            const parts = textToProcess.split(
+                                /<\/(think|thought)\s*>/i,
+                            );
                             const thinkingPart = parts[0];
                             // Clean native <thinkmeta> tags from answer part
-                            const answerPart = parts.slice(2).join("")
+                            const answerPart = parts
+                                .slice(2)
+                                .join("")
                                 .replace(/<thinkmeta\s+[^>]*?\/>/gi, "")
                                 .trim();
 
@@ -304,8 +328,7 @@ export class ProviderFireworks implements IProvider {
                             }
                         }
                     } else if (
-                        pendingReasoning.length >=
-                        DECIDE_WRAPPED_AFTER_CHARS
+                        pendingReasoning.length >= DECIDE_WRAPPED_AFTER_CHARS
                     ) {
                         reasoningStreamMode = "wrapped";
                         inReasoning = true;
@@ -325,13 +348,19 @@ export class ProviderFireworks implements IProvider {
                             .replace(/<thinkmeta\s+[^>]*?\/>/gi, "");
 
                         // Check for closing tag
-                        const closingTagMatch = textToProcess.match(/<\/(think|thought)\s*>/i);
+                        const closingTagMatch = textToProcess.match(
+                            /<\/(think|thought)\s*>/i,
+                        );
                         if (closingTagMatch) {
                             nativeThinkClosed = true;
-                            const parts = textToProcess.split(/<\/(think|thought)\s*>/i);
+                            const parts = textToProcess.split(
+                                /<\/(think|thought)\s*>/i,
+                            );
                             const thinkingPart = parts[0];
                             // Clean native <thinkmeta> tags from answer part
-                            const answerPart = parts.slice(2).join("")
+                            const answerPart = parts
+                                .slice(2)
+                                .join("")
                                 .replace(/<thinkmeta\s+[^>]*?\/>/gi, "")
                                 .trim();
 
@@ -400,7 +429,8 @@ export class ProviderFireworks implements IProvider {
                 // Stream ended before we hit our buffering threshold; check for native markup.
                 if (detectNativeThinkMarkup(nativeProbe)) {
                     // Has native tags - strip them
-                    const { thinking, answer } = stripNativeThinkTags(pendingReasoning);
+                    const { thinking, answer } =
+                        stripNativeThinkTags(pendingReasoning);
                     if (thinking) {
                         inReasoning = true;
                         reasoningStartedAtMs = Date.now();

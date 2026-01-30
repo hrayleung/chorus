@@ -20,6 +20,7 @@ export const ThinkBlock = ({
     seconds?: string;
 }) => {
     const trimmedContent = typeof content === "string" ? content.trim() : "";
+    const isRedactedPlaceholder = trimmedContent === "[redacted]";
     const [isOpen, setIsOpen] = useState(!isComplete);
     const [sawComplete, setSawComplete] = useState(isComplete);
 
@@ -45,6 +46,27 @@ export const ThinkBlock = ({
     // Don't render anything if content is empty
     if (!trimmedContent) {
         return null;
+    }
+
+    // Hide the placeholder content but keep the thought chip.
+    if (isRedactedPlaceholder) {
+        return (
+            <div
+                className="my-4 max-w-full"
+                onClick={(e: React.MouseEvent<HTMLDivElement>) => {
+                    e.stopPropagation(); // prevent message from selecting
+                }}
+            >
+                <div className="inline-flex max-w-full items-center gap-2 rounded-full border px-3 py-1.5 text-left font-geist-mono text-xs font-[350] text-muted-foreground">
+                    {!isComplete ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                        <BrainIcon className="h-3 w-3" />
+                    )}
+                    <span className="truncate">{label}</span>
+                </div>
+            </div>
+        );
     }
 
     return (

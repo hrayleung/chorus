@@ -102,31 +102,23 @@ export function ThinkingParamsButton({
     const showReasoningEffort =
         providerName === "openai" ||
         providerName === "grok" ||
-        providerName === "fireworks";
+        providerName === "fireworks" ||
+        (providerName === "cerebras" &&
+            modelName?.toLowerCase().includes("gpt-oss"));
     const showBudgetTokens =
         providerName === "anthropic" || modelName?.includes("gemini-2.5");
     const showThinkingLevel = modelName?.includes("gemini-3");
 
-    const openaiSupportsShowThoughts =
-        providerName === "openai" &&
-        (modelName?.startsWith("gpt-5") || modelName?.startsWith("o"));
-
-    const showThoughtsToggle =
-        openaiSupportsShowThoughts ||
-        (providerName === "openai" && Boolean(modelConfig.showThoughts)) ||
-        providerName === "grok" ||
-        providerName === "anthropic" ||
-        providerName === "openrouter" ||
-        providerName === "fireworks" ||
-        providerName === "cerebras" ||
-        modelName?.includes("gemini");
+    // GLM models can enable/disable reasoning
+    const showReasoningToggle =
+        providerName === "cerebras" && modelName?.toLowerCase().includes("glm");
 
     // Don't show the button if no thinking parameters are applicable
     if (
         !showReasoningEffort &&
         !showBudgetTokens &&
         !showThinkingLevel &&
-        !showThoughtsToggle
+        !showReasoningToggle
     ) {
         return null;
     }
@@ -136,7 +128,7 @@ export function ThinkingParamsButton({
         modelConfig.budgetTokens ||
         modelConfig.reasoningEffort ||
         modelConfig.thinkingLevel ||
-        modelConfig.showThoughts;
+        modelConfig.showThoughts; // showThoughts used for GLM enable/disable
 
     const reasoningEffortValue =
         modelConfig.reasoningEffort === null
@@ -286,13 +278,18 @@ export function ThinkingParamsButton({
                         </p>
                     </div>
 
-                    {showThoughtsToggle && (
+                    {showReasoningToggle && (
                         <div className="flex items-center justify-between gap-3">
                             <div className="space-y-0.5">
-                                <Label className="text-xs">Show thoughts</Label>
+                                <Label className="text-xs">
+                                    Enable Reasoning
+                                    <span className="text-muted-foreground ml-1">
+                                        (GLM)
+                                    </span>
+                                </Label>
                                 <p className="text-xs text-muted-foreground">
-                                    Adds a collapsible &lt;think&gt; block to
-                                    the response (persisted).
+                                    Enable native reasoning for this model. When
+                                    enabled, thinking process will be shown.
                                 </p>
                             </div>
                             <Switch
@@ -322,6 +319,11 @@ export function ThinkingParamsButton({
                                 {providerName === "fireworks" && (
                                     <span className="text-muted-foreground ml-1">
                                         (Fireworks)
+                                    </span>
+                                )}
+                                {providerName === "cerebras" && (
+                                    <span className="text-muted-foreground ml-1">
+                                        (Cerebras GPT-OSS)
                                     </span>
                                 )}
                             </Label>

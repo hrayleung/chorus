@@ -66,8 +66,15 @@ export class ProviderGrok implements IProvider {
                 },
             );
 
+        const includeThoughts =
+            Boolean(modelConfig.showThoughts) ||
+            (modelConfig.reasoningEffort !== undefined &&
+                modelConfig.reasoningEffort !== null);
+
         const systemPrompt = [
-            modelConfig.showThoughts
+            // xAI only exposes native reasoning content for Grok 3 Mini (chat.completions).
+            // For other Grok models, fall back to prompting for a short <think> summary.
+            includeThoughts && !modelName.includes("grok-3-mini")
                 ? Prompts.THOUGHTS_SYSTEM_PROMPT
                 : undefined,
             modelConfig.systemPrompt,
@@ -234,7 +241,7 @@ export class ProviderGrok implements IProvider {
                           ? delta.reasoning_content
                           : undefined;
 
-                if (reasoningDelta) {
+                if (includeThoughts && reasoningDelta) {
                     if (!inReasoning) {
                         inReasoning = true;
                         reasoningStartedAtMs = Date.now();

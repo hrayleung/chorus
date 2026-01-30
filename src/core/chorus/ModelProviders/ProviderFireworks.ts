@@ -4,6 +4,7 @@ import { LLMMessage, StreamResponseParams } from "../Models";
 import { IProvider } from "./IProvider";
 import { canProceedWithProvider } from "@core/utilities/ProxyUtils";
 import OpenAICompletionsAPIUtils from "@core/chorus/OpenAICompletionsAPIUtils";
+import { isMeaningfulTextDelta } from "./streamTextUtils";
 
 function stripThinkBlocks(text: string): string {
     return text
@@ -400,7 +401,9 @@ export class ProviderFireworks implements IProvider {
             }
 
             if (typeof delta?.content === "string" && delta.content) {
-                sawContent = true;
+                if (isMeaningfulTextDelta(delta.content)) {
+                    sawContent = true;
+                }
                 if (showThoughts) {
                     if (reasoningStreamMode === "unknown") {
                         // If we got here, we buffered a little reasoning but haven't decided how to render it.

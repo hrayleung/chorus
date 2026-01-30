@@ -24,6 +24,14 @@ type AcceptedImageType =
     | "image/gif"
     | "image/webp";
 
+function stripThinkBlocks(text: string): string {
+    return text
+        .replace(/<think(?:\s+[^>]*?)?>[\s\S]*?<\/think\s*>/gi, "")
+        .replace(/<thought(?:\s+[^>]*?)?>[\s\S]*?<\/thought\s*>/gi, "")
+        .replace(/<thinkmeta\s+[^>]*?\/>/gi, "")
+        .trim();
+}
+
 /**
  * This exists because we need to keep track of which messages have attachments
  * for our prompt caching scheme
@@ -63,15 +71,6 @@ export class ProviderAnthropic implements IProvider {
 
         const messages = await convertConversationToAnthropic(llmConversation);
 
-        const systemPrompt = [
-            modelConfig.showThoughts
-                ? Prompts.THOUGHTS_SYSTEM_PROMPT
-                : undefined,
-            modelConfig.systemPrompt,
-        ]
-            .filter(Boolean)
-            .join("\n\n");
-
         const maxTokens = getAnthropicMaxTokens(modelName);
         const thinkingBudgetTokens =
             modelConfig.budgetTokens !== undefined
@@ -82,6 +81,19 @@ export class ProviderAnthropic implements IProvider {
                 : undefined;
 
         const isThinking = thinkingBudgetTokens !== undefined;
+        const includeThoughts = Boolean(modelConfig.showThoughts) || isThinking;
+
+        const systemPrompt = [
+            // If we have native thinking blocks, prefer those over prompting for <think> tags.
+            // Prompting here can cause duplicated/nested blocks and makes it easier for models
+            // to accidentally put the final answer inside <think>.
+            includeThoughts && !isThinking
+                ? Prompts.THOUGHTS_SYSTEM_PROMPT
+                : undefined,
+            modelConfig.systemPrompt,
+        ]
+            .filter(Boolean)
+            .join("\n\n");
         const nativeWebSearchEnabled =
             enabledToolsets?.includes("web") ?? false;
         const shouldUseNativeWebSearch = nativeWebSearchEnabled;
@@ -208,16 +220,20 @@ export class ProviderAnthropic implements IProvider {
             onError(error.message);
         });
 
-        stream.on("text", (text: string) => {
-            onChunk(text);
-        });
+        let inThinkingBlock = false;
+        let thinkingBlockIndex: number | null = null;
+        let pendingText = "";
+        const flushPendingText = () => {
+            if (!pendingText) return;
+            onChunk(pendingText);
+            pendingText = "";
+        };
 
         // Extended thinking support:
         // Some Claude models stream reasoning as separate content blocks (e.g. type: "thinking").
         // When we detect these blocks, we wrap them in <think>...</think> so the UI can render
         // them as a collapsible ThinkBlock.
         const contentBlockTypesByIndex = new Map<number, string>();
-        let inThinkingBlock = false;
         let sawThinkingContent = false;
         let wroteRedactedPlaceholder = false;
         let thinkingStartedAtMs: number | undefined;
@@ -225,6 +241,7 @@ export class ProviderAnthropic implements IProvider {
         const closeThinkingBlock = () => {
             if (!inThinkingBlock) return;
             inThinkingBlock = false;
+            thinkingBlockIndex = null;
             onChunk("</think>");
             if (thinkingStartedAtMs !== undefined) {
                 const seconds = Math.max(
@@ -235,14 +252,34 @@ export class ProviderAnthropic implements IProvider {
             }
             thinkingStartedAtMs = undefined;
             wroteRedactedPlaceholder = false;
+            flushPendingText();
         };
 
-        stream.on("streamEvent", (event: unknown, messageSnapshot: unknown) => {
+        const sanitizeTextDelta = (text: string) => {
+            if (
+                isThinking &&
+                (text.includes("<think") ||
+                    text.includes("</think") ||
+                    text.includes("<thought") ||
+                    text.includes("</thought") ||
+                    text.includes("<thinkmeta"))
+            ) {
+                return text
+                    .replace(/<think/g, "&lt;think")
+                    .replace(/<\/think/g, "&lt;/think")
+                    .replace(/<thought/g, "&lt;thought")
+                    .replace(/<\/thought/g, "&lt;/thought")
+                    .replace(/<thinkmeta/g, "&lt;thinkmeta");
+            }
+            return text;
+        };
+
+        stream.on("streamEvent", (event: unknown) => {
             const ev = event as {
                 type?: string;
                 index?: number;
                 content_block?: { type?: string };
-                delta?: { type?: string; text?: string };
+                delta?: { type?: string; text?: string; thinking?: string };
             };
 
             if (ev.type === "content_block_start") {
@@ -251,35 +288,45 @@ export class ProviderAnthropic implements IProvider {
                 if (idx !== null && typeof blockType === "string") {
                     contentBlockTypesByIndex.set(idx, blockType);
                 }
+
+                // redacted_thinking may not stream deltas; render a placeholder so users
+                // still see a ThinkBlock chip.
+                if (
+                    includeThoughts &&
+                    idx !== null &&
+                    blockType === "redacted_thinking" &&
+                    !inThinkingBlock
+                ) {
+                    inThinkingBlock = true;
+                    thinkingBlockIndex = idx;
+                    sawThinkingContent = true;
+                    thinkingStartedAtMs = Date.now();
+                    wroteRedactedPlaceholder = true;
+                    onChunk("<think>");
+                    onChunk("[redacted]");
+                }
             }
 
             if (ev.type === "content_block_delta") {
                 const idx = typeof ev.index === "number" ? ev.index : null;
                 if (idx === null) return;
 
-                const snapshot = messageSnapshot as {
-                    content?: Array<{ type?: string }>;
-                };
-                const snapshotBlockType =
-                    snapshot?.content?.[idx]?.type ?? undefined;
-                const blockType =
-                    snapshotBlockType ?? contentBlockTypesByIndex.get(idx);
+                const blockType = contentBlockTypesByIndex.get(idx);
+                const deltaType = ev.delta?.type;
 
-                if (
+                const isThinkingDelta =
+                    deltaType === "thinking_delta" ||
+                    deltaType === "signature_delta" ||
                     blockType === "thinking" ||
-                    blockType === "redacted_thinking"
-                ) {
-                    const deltaText =
-                        typeof ev.delta?.text === "string"
-                            ? ev.delta.text
-                            : typeof (ev.delta as { thinking?: unknown })
-                                    ?.thinking === "string"
-                              ? ((ev.delta as { thinking: string }).thinking ??
-                                "")
-                              : "";
+                    blockType === "redacted_thinking";
 
+                const isTextDelta =
+                    deltaType === "text_delta" || blockType === "text";
+
+                if (includeThoughts && isThinkingDelta) {
                     if (!inThinkingBlock) {
                         inThinkingBlock = true;
+                        thinkingBlockIndex = idx;
                         sawThinkingContent = true;
                         thinkingStartedAtMs = Date.now();
                         wroteRedactedPlaceholder = false;
@@ -287,17 +334,53 @@ export class ProviderAnthropic implements IProvider {
                     }
 
                     // redacted_thinking is not human-readable; skip content.
-                    if (blockType === "thinking") {
-                        onChunk(deltaText);
-                    } else if (!wroteRedactedPlaceholder) {
-                        wroteRedactedPlaceholder = true;
-                        onChunk("[redacted]");
+                    if (blockType === "redacted_thinking") {
+                        if (!wroteRedactedPlaceholder) {
+                            wroteRedactedPlaceholder = true;
+                            onChunk("[redacted]");
+                        }
+                    } else if (deltaType === "thinking_delta") {
+                        const deltaText =
+                            typeof ev.delta?.thinking === "string"
+                                ? ev.delta.thinking
+                                : typeof ev.delta?.text === "string"
+                                  ? ev.delta.text
+                                  : "";
+                        if (deltaText) onChunk(deltaText);
+                    }
+                }
+
+                // Text deltas should be streamed as normal output (but never while a think block
+                // is still open, since some SDKs can deliver events out of order).
+                if (isTextDelta) {
+                    const deltaText = sanitizeTextDelta(
+                        typeof ev.delta?.text === "string" ? ev.delta.text : "",
+                    );
+                    if (deltaText) {
+                        if (inThinkingBlock) {
+                            pendingText += deltaText;
+                        } else {
+                            onChunk(deltaText);
+                        }
                     }
                 }
             }
 
             if (ev.type === "content_block_stop") {
-                closeThinkingBlock();
+                if (!inThinkingBlock) return;
+                const idx = typeof ev.index === "number" ? ev.index : null;
+                if (idx === null) {
+                    closeThinkingBlock();
+                    return;
+                }
+                if (thinkingBlockIndex === null || idx === thinkingBlockIndex) {
+                    closeThinkingBlock();
+                    return;
+                }
+                const blockType = contentBlockTypesByIndex.get(idx);
+                if (blockType === "thinking" || blockType === "redacted_thinking") {
+                    closeThinkingBlock();
+                }
             }
         });
 
@@ -511,8 +594,10 @@ async function formatMessageWithAttachments(
         }));
 
     const finalText =
-        message.role === "user" || message.role === "assistant"
+        message.role === "user"
             ? message.content || "..." // ensure there's always some text in the message, so that Anthropic doesn't complain
+            : message.role === "assistant"
+              ? stripThinkBlocks(message.content || "") || "..."
             : "";
 
     return {

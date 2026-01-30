@@ -232,4 +232,19 @@ I've come across search results from The Guardian and WaPo.</think><thinkmeta se
             expect(thinkContent).not.toContain("Shutdown risk is rising");
         }
     });
+
+    it("should not capture the answer when it starts immediately after <thinkmeta/>", () => {
+        const text = `<think>Reasoning</think><thinkmeta seconds="3"/>Answer starts immediately.`;
+
+        const result = processThinkBlocks(text);
+
+        expect(result).toContain("Answer starts immediately.");
+
+        const thinkBlockRegex = /<think[^>]*>([\s\S]*?)<\/think>/g;
+        const matches = result.matchAll(thinkBlockRegex);
+        for (const match of matches) {
+            const thinkContent = match[1];
+            expect(thinkContent).not.toContain("Answer starts immediately.");
+        }
+    });
 });

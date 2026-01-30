@@ -445,9 +445,7 @@ export async function saveModelAndDefaultConfig(
              ON CONFLICT(id) DO UPDATE SET
                  display_name = excluded.display_name,
                  author = excluded.author,
-                 model_id = excluded.model_id,
-                 thinking_level = COALESCE(model_configs.thinking_level, excluded.thinking_level),
-                 show_thoughts = COALESCE(model_configs.show_thoughts, excluded.show_thoughts)`,
+                 model_id = excluded.model_id`,
             [
                 model.id,
                 modelConfigDisplayName,

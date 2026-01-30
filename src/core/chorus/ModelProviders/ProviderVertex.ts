@@ -393,18 +393,26 @@ export class ProviderVertex implements IProvider {
             const stream = await client.chat.completions.create(streamParams);
             for await (const chunk of stream) {
                 chunks.push(chunk);
-                const delta = chunk.choices[0]?.delta as unknown as {
-                    content?: string;
-                    reasoning?: string;
-                    reasoning_content?: string;
+                const delta = chunk.choices[0]?.delta;
+
+                type VertexDelta = NonNullable<typeof delta> & {
+                    reasoning?: unknown;
+                    reasoning_content?: unknown;
                 };
 
-                const reasoningDelta =
-                    typeof delta?.reasoning_content === "string"
-                        ? delta.reasoning_content
-                        : typeof delta?.reasoning === "string"
-                          ? delta.reasoning
-                          : undefined;
+                const isVertexDelta = (d: typeof delta): d is VertexDelta => {
+                    if (!d || typeof d !== "object") return false;
+                    return "reasoning_content" in d || "reasoning" in d;
+                };
+
+                let reasoningDelta: string | undefined;
+                if (showThoughts && isVertexDelta(delta)) {
+                    if (typeof delta.reasoning_content === "string") {
+                        reasoningDelta = delta.reasoning_content;
+                    } else if (typeof delta.reasoning === "string") {
+                        reasoningDelta = delta.reasoning;
+                    }
+                }
 
                 // Vertex may return thoughts in a separate reasoning field OR inline via <thought>/<think> tags.
                 if (showThoughts && reasoningDelta) {

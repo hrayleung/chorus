@@ -341,7 +341,6 @@ export class ProviderOpenAI implements IProvider {
             }
         > = {};
 
-        let inReasoningSummary = false;
         let reasoningSummaryText = "";
         let reasoningSummaryStartedAtMs: number | undefined;
         let sawOutputText = false;
@@ -362,6 +361,27 @@ export class ProviderOpenAI implements IProvider {
                     .replace(/<\/thought/g, "&lt;/thought");
             }
             return text;
+        };
+
+        const flushReasoningSummaryBlock = () => {
+            const content = reasoningSummaryText.trim();
+            if (!content) return "";
+
+            let block = `<think>\n${sanitizeTextDelta(content)}\n</think>`;
+            if (reasoningSummaryStartedAtMs !== undefined) {
+                const seconds = Math.max(
+                    1,
+                    Math.round(
+                        (Date.now() - reasoningSummaryStartedAtMs) / 1000,
+                    ),
+                );
+                block += `<thinkmeta seconds="${seconds}"/>`;
+            }
+            block += "\n\n";
+
+            reasoningSummaryText = "";
+            reasoningSummaryStartedAtMs = undefined;
+            return block;
         };
 
         const appendCitationsFromOutput = (
@@ -413,33 +433,6 @@ export class ProviderOpenAI implements IProvider {
             }
         };
 
-        const flushReasoningSummaryClose = (): string => {
-            if (!inReasoningSummary) return "";
-            inReasoningSummary = false;
-
-            let closingText = "</think>";
-            if (reasoningSummaryStartedAtMs !== undefined) {
-                const seconds = Math.max(
-                    1,
-                    Math.round(
-                        (Date.now() - reasoningSummaryStartedAtMs) / 1000,
-                    ),
-                );
-                closingText += `<thinkmeta seconds="${seconds}"/>`;
-            }
-            closingText += "\n\n";
-
-            reasoningSummaryStartedAtMs = undefined;
-            return closingText;
-        };
-
-        const closeReasoningSummary = () => {
-            const closingText = flushReasoningSummaryClose();
-            if (closingText) {
-                onChunk(closingText);
-            }
-        };
-
         try {
             // Process the streaming response
             for await (const event of stream as unknown as AsyncIterable<OpenAIStreamEvent>) {
@@ -449,61 +442,57 @@ export class ProviderOpenAI implements IProvider {
                     (event.type === "response.reasoning_summary_text.delta" ||
                         event.type === "response.reasoning_summary.delta")
                 ) {
-                    if (!inReasoningSummary) {
-                        inReasoningSummary = true;
-                        reasoningSummaryText = "";
+                    if (reasoningSummaryStartedAtMs === undefined) {
                         reasoningSummaryStartedAtMs = Date.now();
-                        onChunk("<think>");
                     }
                     reasoningSummaryText += event.delta;
-                    onChunk(event.delta);
                 } else if (
                     shouldRequestReasoningSummary &&
                     !sawOutputText &&
                     event.type === "response.reasoning_summary_text.done"
                 ) {
-                    if (!inReasoningSummary) {
-                        inReasoningSummary = true;
-                        reasoningSummaryText = "";
+                    if (reasoningSummaryStartedAtMs === undefined) {
                         reasoningSummaryStartedAtMs = Date.now();
-                        onChunk("<think>");
                     }
                     if (!reasoningSummaryText && event.text) {
-                        onChunk(event.text);
+                        reasoningSummaryText = event.text;
                     }
-                    closeReasoningSummary();
+                    const summaryBlock = flushReasoningSummaryBlock();
+                    if (summaryBlock) {
+                        onChunk(summaryBlock);
+                    }
                 }
                 // Some SDKs emit an initial output_text part via content_part.added.
-                // Close any open reasoning summary before we start the assistant's visible output.
+                // Flush any pending reasoning summary before we start the assistant's visible output.
                 else if (
                     event.type === "response.content_part.added" &&
                     event.part.type === "output_text"
                 ) {
-                    const closingText = flushReasoningSummaryClose();
+                    const summaryBlock = flushReasoningSummaryBlock();
                     if (
                         typeof event.part.text === "string" &&
                         event.part.text
                     ) {
                         sawOutputText = true;
                         onChunk(
-                            closingText + sanitizeTextDelta(event.part.text),
+                            summaryBlock + sanitizeTextDelta(event.part.text),
                         );
-                    } else if (closingText) {
-                        onChunk(closingText);
+                    } else if (summaryBlock) {
+                        onChunk(summaryBlock);
                     }
                 }
                 // Handle text streaming
                 else if (event.type === "response.output_text.delta") {
                     sawOutputText = true;
-                    const closingText = flushReasoningSummaryClose();
-                    onChunk(closingText + sanitizeTextDelta(event.delta));
+                    const summaryBlock = flushReasoningSummaryBlock();
+                    onChunk(summaryBlock + sanitizeTextDelta(event.delta));
                 }
                 // Handle text done event (if no deltas were emitted)
                 else if (event.type === "response.output_text.done") {
                     if (!sawOutputText && event.text) {
                         sawOutputText = true;
-                        const closingText = flushReasoningSummaryClose();
-                        onChunk(closingText + sanitizeTextDelta(event.text));
+                        const summaryBlock = flushReasoningSummaryBlock();
+                        onChunk(summaryBlock + sanitizeTextDelta(event.text));
                     }
                 }
                 // TOOL CALL HANDLING - OpenAI streams tool calls in multiple events:
@@ -569,21 +558,26 @@ export class ProviderOpenAI implements IProvider {
                 }
                 // 5. Handle response.done event for citations
                 else if (event.type === "response.done" && event.output) {
-                    if (inReasoningSummary) {
-                        closeReasoningSummary();
+                    const summaryBlock = flushReasoningSummaryBlock();
+                    if (summaryBlock) {
+                        onChunk(summaryBlock);
                     }
                     appendCitationsFromOutput(event.output);
                 }
                 // Some SDKs emit response.completed with the full response payload (including output annotations)
                 else if (event.type === "response.completed") {
-                    if (inReasoningSummary) {
-                        closeReasoningSummary();
+                    const summaryBlock = flushReasoningSummaryBlock();
+                    if (summaryBlock) {
+                        onChunk(summaryBlock);
                     }
                     appendCitationsFromOutput(event.response?.output);
                 }
             }
         } finally {
-            closeReasoningSummary();
+            const summaryBlock = flushReasoningSummaryBlock();
+            if (summaryBlock) {
+                onChunk(summaryBlock);
+            }
         }
 
         await onComplete(

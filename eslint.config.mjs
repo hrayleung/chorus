@@ -13,6 +13,7 @@ export default tseslint.config(
             "reference/**/*",
             "postcss.config.js",
             "vite.config.ts",
+            "vitest.config.ts",
             "tailwind.config.cjs",
             ".github/**/*.yml",
             ".github/**/*.yaml",

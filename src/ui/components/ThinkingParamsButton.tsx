@@ -35,10 +35,6 @@ export function ThinkingParamsButton({
     const updateThinkingParams = ModelsAPI.useUpdateThinkingParams();
     const [open, setOpen] = useState(false);
 
-    // Debug
-    console.log("[ThinkingParamsButton] modelConfig:", modelConfig);
-    console.log("[ThinkingParamsButton] modelId:", modelConfig.modelId);
-
     // Local state to avoid stale closure issues
     // These track the current database values
     const [localBudgetTokens, setLocalBudgetTokens] = useState<string>(() => {
@@ -111,12 +107,6 @@ export function ThinkingParamsButton({
         providerName === "anthropic" || modelName?.includes("gemini-2.5");
     const showThinkingLevel = modelName?.includes("gemini-3");
 
-    // Debug
-    console.log("[ThinkingParamsButton] providerName:", providerName);
-    console.log("[ThinkingParamsButton] modelName:", modelName);
-    console.log("[ThinkingParamsButton] showThinkingLevel:", showThinkingLevel);
-    console.log("[ThinkingParamsButton] showBudgetTokens:", showBudgetTokens);
-
     const openaiSupportsShowThoughts =
         providerName === "openai" &&
         (modelName?.startsWith("gpt-5") || modelName?.startsWith("o"));
@@ -148,14 +138,29 @@ export function ThinkingParamsButton({
         modelConfig.thinkingLevel ||
         modelConfig.showThoughts;
 
+    const reasoningEffortValue =
+        modelConfig.reasoningEffort === null
+            ? "none"
+            : (modelConfig.reasoningEffort ?? "medium");
+
+    const thinkingLevelValue =
+        modelConfig.thinkingLevel === null
+            ? "none"
+            : (modelConfig.thinkingLevel ?? "HIGH");
+
     // Each handler ONLY updates its own field - avoids stale closure issues
     const handleReasoningEffortChange = async (value: string) => {
-        // For reasoning models, use "medium" as the default if not explicitly set
-        // Only set to null if explicitly disabled
-        const newEffort =
-            value === "none"
-                ? null
-                : (value as "low" | "medium" | "high" | "xhigh");
+        const effortMap: Record<string, "low" | "medium" | "high" | "xhigh"> = {
+            low: "low",
+            medium: "medium",
+            high: "high",
+            xhigh: "xhigh",
+        };
+
+        const newEffort = value === "none" ? null : effortMap[value];
+        if (newEffort === undefined && value !== "none") {
+            return;
+        }
 
         try {
             await updateThinkingParams.mutateAsync({
@@ -168,9 +173,15 @@ export function ThinkingParamsButton({
     };
 
     const handleThinkingLevelChange = async (value: string) => {
-        // For Gemini 3, "default" should map to "HIGH" (the actual default)
-        // Only set to null if explicitly disabled
-        const newLevel = value === "none" ? null : (value as "LOW" | "HIGH");
+        const levelMap: Record<string, "LOW" | "HIGH"> = {
+            LOW: "LOW",
+            HIGH: "HIGH",
+        };
+
+        const newLevel = value === "none" ? null : levelMap[value];
+        if (newLevel === undefined && value !== "none") {
+            return;
+        }
 
         try {
             await updateThinkingParams.mutateAsync({
@@ -315,7 +326,7 @@ export function ThinkingParamsButton({
                                 )}
                             </Label>
                             <Select
-                                value={modelConfig.reasoningEffort || "medium"}
+                                value={reasoningEffortValue}
                                 onValueChange={handleReasoningEffortChange}
                             >
                                 <SelectTrigger id="reasoning-effort">
@@ -397,7 +408,7 @@ export function ThinkingParamsButton({
                                 </span>
                             </Label>
                             <Select
-                                value={modelConfig.thinkingLevel || "HIGH"}
+                                value={thinkingLevelValue}
                                 onValueChange={handleThinkingLevelChange}
                             >
                                 <SelectTrigger id="thinking-level">

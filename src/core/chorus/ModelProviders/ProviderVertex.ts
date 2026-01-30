@@ -300,7 +300,15 @@ export class ProviderVertex implements IProvider {
             ];
         }
 
-        const streamParams: OpenAI.ChatCompletionCreateParamsStreaming = {
+        type VertexStreamParams = OpenAI.ChatCompletionCreateParamsStreaming & {
+            // Vertex OpenAI-compatible API extensions
+            web_search_options?: Record<string, unknown>;
+            extra_body?: {
+                google?: Record<string, unknown>;
+            };
+        };
+
+        const streamParams: VertexStreamParams = {
             model: modelName,
             messages,
             stream: true,
@@ -317,27 +325,13 @@ export class ProviderVertex implements IProvider {
             // Vertex AI OpenAI-compatible web search grounding.
             // The API accepts `web_search_options` but does not support sub-options.
             // https://docs.cloud.google.com/vertex-ai/generative-ai/docs/migrate/openai/overview
-            (
-                streamParams as unknown as Record<string, unknown>
-            ).web_search_options = {};
+            streamParams.web_search_options = {};
         }
 
         // Gemini thinking via extra_body.google (Vertex OpenAI-compatible API)
         // Ref: https://cloud.google.com/vertex-ai/generative-ai/docs/migrate/openai/overview
         const isGemini3 = modelName.includes("gemini-3");
         const isGemini25 = modelName.includes("gemini-2.5");
-
-        // Debug: Log thinking parameters
-        console.log(`[ProviderVertex] Model: ${modelName}`);
-        console.log(
-            `[ProviderVertex] isGemini3: ${isGemini3}, isGemini25: ${isGemini25}`,
-        );
-        console.log(
-            `[ProviderVertex] modelConfig.thinkingLevel: ${modelConfig.thinkingLevel}`,
-        );
-        console.log(
-            `[ProviderVertex] modelConfig.budgetTokens: ${modelConfig.budgetTokens}`,
-        );
 
         const showThoughts = Boolean(modelConfig.showThoughts);
 
@@ -365,16 +359,10 @@ export class ProviderVertex implements IProvider {
                 ...(showThoughts ? { thought_tag_marker: "think" } : {}),
             };
 
-            (streamParams as unknown as Record<string, unknown>).extra_body = {
+            streamParams.extra_body = {
                 google: googleExtra,
             };
         }
-
-        console.log(`[ProviderVertex] thinkingEnabled: ${thinkingEnabled}`);
-        console.log(
-            `[ProviderVertex] streamParams:`,
-            JSON.stringify(streamParams, null, 2),
-        );
 
         if (tools && tools.length > 0) {
             streamParams.tools =

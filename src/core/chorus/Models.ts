@@ -217,8 +217,8 @@ export type ModelConfig = {
     systemPrompt?: string;
     isDefault: boolean;
     budgetTokens?: number; // optional token budget for thinking mode (Anthropic, Gemini 2.5)
-    reasoningEffort?: "low" | "medium" | "high" | "xhigh"; // OpenAI o1/o3/GPT-5, xAI Grok
-    thinkingLevel?: "LOW" | "HIGH"; // Google Gemini 3 thinking level
+    reasoningEffort?: "low" | "medium" | "high" | "xhigh" | null; // OpenAI o1/o3/GPT-5, xAI Grok
+    thinkingLevel?: "LOW" | "HIGH" | null; // Google Gemini 3 thinking level
     showThoughts?: boolean; // request a collapsible <think> block in the output (persisted)
 
     // pricing (from models table)
